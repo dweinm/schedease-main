@@ -293,15 +293,40 @@ const scheduleSchema = new mongoose.Schema({
     ref: 'Course',
     required: true
   },
+  courseCode: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  courseName: {
+    type: String,
+    required: true,
+    trim: true
+  },
   instructorId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Instructor',
     required: true
   },
+  instructorName: {
+    type: String,
+    required: true,
+    trim: true
+  },
   roomId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Room',
     required: true
+  },
+  roomName: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  building: {
+    type: String,
+    required: true,
+    trim: true
   },
   dayOfWeek: {
     type: String,

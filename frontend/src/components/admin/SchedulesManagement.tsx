@@ -83,6 +83,7 @@ interface Schedule {
   status: 'draft' | 'published' | 'conflict' | 'canceled';
   conflicts: string[];
   createdAt: string;
+  academicYear?: string;
 }
 
 interface ScheduleFormData {
@@ -127,11 +128,11 @@ export function SchedulesManagement() {
     dayOfWeek: '',
     startTime: '',
     endTime: '',
-    semester: 'Fall',
+    semester: 'First Term',
     year: 2024
   });
   const [generationSettings, setGenerationSettings] = useState<GenerationSettings>({
-    semester: 'Fall',
+    semester: 'First Term',
     year: 2024,
     startDate: '2024-08-26',
     endDate: '2024-12-13',
@@ -141,7 +142,7 @@ export function SchedulesManagement() {
   const [submitting, setSubmitting] = useState(false);
 
   const daysOfWeek = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  const semesters = ['Spring', 'Summer', 'Fall'];
+  const semesters = ['First Term', 'Second Term', 'Third Term'];
   const timeSlots = [
     '08:00', '08:30', '09:00', '09:30', '10:00', '10:30', '11:00', '11:30',
     '12:00', '12:30', '13:00', '13:30', '14:00', '14:30', '15:00', '15:30',
@@ -268,7 +269,10 @@ export function SchedulesManagement() {
           roomName,
           building,
           year,
+          semester: s.semester || 'First Term',
+          status: s.conflicts?.length > 0 ? 'conflict' : (s.status || 'published'),
           conflicts: s.conflicts || [],
+          createdAt: s.createdAt || new Date().toISOString()
         } as Schedule;
       });
 
@@ -294,16 +298,16 @@ export function SchedulesManagement() {
     try {
       // Validate required fields
       if (!formData.courseId || !formData.instructorId || !formData.roomId || 
-          !formData.dayOfWeek || !formData.startTime || !formData.endTime) {
+          !formData.dayOfWeek || !formData.startTime || !formData.endTime ||
+          !formData.semester || !formData.year) {
         toast.error('All fields are required');
         setSubmitting(false);
         return;
       }
 
-      // Check for conflicts before creating
-      const conflicts = detectConflicts(formData);
-      if (conflicts.length > 0) {
-        toast.error(`Cannot create schedule: ${conflicts.join(', ')}`);
+      // End time must be after start time
+      if (formData.endTime <= formData.startTime) {
+        toast.error('End time must be after start time');
         setSubmitting(false);
         return;
       }
@@ -316,25 +320,36 @@ export function SchedulesManagement() {
         return;
       }
 
-      // Log selected instructor for debugging
-      console.log('Selected instructor:', selectedInstructor);
-
       const payload = {
-        courseId: formData.courseId,
-        instructorId: formData.instructorId,
-        roomId: formData.roomId,
-        dayOfWeek: formData.dayOfWeek,
-        startTime: formData.startTime,
-        endTime: formData.endTime,
-        semester: formData.semester,
-        academicYear: `${formData.year}-${formData.year + 1}`,
+        ...formData,
+        year: Number(formData.year),
+        academicYear: `${formData.year}-${formData.year + 1}`
       };
 
+      // Always proceed with creation, let backend handle conflicts
       const res = await apiService.createSchedule(payload);
-      const created = (res && (res.schedule || res.data || res.created)) ? (res.schedule || res.data || res) : null;
+      console.log('Create schedule response:', res); // Debug log
 
+      if (!res?.success) {
+        toast.error(res?.message || 'Failed to create schedule');
+        return;
+      }
+
+      const created = res.schedule;
+      // Also check conflicts in the response object itself
+      const conflicts = res.conflicts || created?.conflicts || [];
+      
       if (created) {
-        toast.success('Schedule created successfully');
+        // Show appropriate message and details based on conflicts
+        if ((created.status === 'conflict' || conflicts.length > 0)) {
+          // Show each conflict detail in a separate warning toast
+          conflicts.forEach((conflict: string) => {
+            toast.warning(conflict);
+          });
+          toast.warning('Schedule created with conflicts. Check conflict details above.');
+        } else {
+          toast.success('Schedule created successfully');
+        }
         setShowCreateDialog(false);
         resetForm();
         await loadScheduleData();
@@ -355,29 +370,51 @@ export function SchedulesManagement() {
     if (!selectedSchedule) return;
     setSubmitting(true);
     try {
-      // Check for conflicts before updating, excluding the current schedule
-      const conflicts = detectConflicts(formData, selectedSchedule._id);
-      if (conflicts.length > 0) {
-        toast.error(`Cannot update schedule: ${conflicts.join(', ')}`);
+      // Validate required fields
+      if (!formData.courseId || !formData.instructorId || !formData.roomId || 
+          !formData.dayOfWeek || !formData.startTime || !formData.endTime ||
+          !formData.semester || !formData.year) {
+        toast.error('All fields are required');
+        setSubmitting(false);
+        return;
+      }
+
+      // End time must be after start time
+      if (formData.endTime <= formData.startTime) {
+        toast.error('End time must be after start time');
+        setSubmitting(false);
         return;
       }
 
       const payload = {
-        courseId: formData.courseId,
-        instructorId: formData.instructorId,
-        roomId: formData.roomId,
-        dayOfWeek: formData.dayOfWeek,
-        startTime: formData.startTime,
-        endTime: formData.endTime,
-        semester: formData.semester,
-        academicYear: `${formData.year}-${formData.year + 1}`,
+        ...formData,
+        year: Number(formData.year),
+        academicYear: `${formData.year}-${formData.year + 1}`
       };
 
       const res = await apiService.updateSchedule(selectedSchedule._id, payload);
-      const updated = (res && (res.schedule || res.data)) ? (res.schedule || res.data) : res;
+      console.log('Update schedule response:', res); // Debug log
+
+      if (!res?.success) {
+        toast.error(res?.message || 'Failed to update schedule');
+        return;
+      }
+
+      const updated = res.schedule;
+      // Also check conflicts in the response object itself
+      const conflicts = res.conflicts || updated?.conflicts || [];
 
       if (updated) {
-        toast.success('Schedule updated successfully');
+        // Show appropriate message and details based on conflicts
+        if ((updated.status === 'conflict' || conflicts.length > 0)) {
+          // Show each conflict detail in a separate warning toast
+          conflicts.forEach((conflict: string) => {
+            toast.warning(conflict);
+          });
+          toast.warning('Schedule updated with conflicts. Check conflict details above.');
+        } else {
+          toast.success('Schedule updated successfully');
+        }
         setShowEditDialog(false);
         setSelectedSchedule(null);
         resetForm();
@@ -412,69 +449,7 @@ export function SchedulesManagement() {
     }
   };
 
-  const detectConflicts = (scheduleData: ScheduleFormData, excludeId?: string): string[] => {
-    const conflicts: string[] = [];
-    
-    // Helper function to check time overlap
-    const hasTimeOverlap = (start1: string, end1: string, start2: string, end2: string) => {
-      return (start1 >= start2 && start1 < end2) ||
-             (end1 > start2 && end1 <= end2) ||
-             (start1 <= start2 && end1 >= end2);
-    };
-
-    // Check room conflicts
-    const roomConflicts = schedules.filter(s => {
-      if (s._id === excludeId) return false;
-      if (s.roomId !== scheduleData.roomId) return false;
-      if (s.dayOfWeek !== scheduleData.dayOfWeek) return false;
-      if (s.semester !== scheduleData.semester) return false;
-      if (s.year !== scheduleData.year) return false;
-      
-      return hasTimeOverlap(
-        scheduleData.startTime,
-        scheduleData.endTime,
-        s.startTime,
-        s.endTime
-      );
-    });
-    
-    if (roomConflicts.length > 0) {
-      const conflictDetails = roomConflicts.map(s => 
-        `${s.courseCode} (${s.startTime}-${s.endTime})`
-      ).join(', ');
-      conflicts.push(`Room is already booked during this time: ${conflictDetails}`);
-    }
-    
-    // Check instructor conflicts
-    const instructorConflicts = schedules.filter(s => {
-      if (s._id === excludeId) return false;
-      if (s.instructorId !== scheduleData.instructorId) return false;
-      if (s.dayOfWeek !== scheduleData.dayOfWeek) return false;
-      if (s.semester !== scheduleData.semester) return false;
-      if (s.year !== scheduleData.year) return false;
-      
-      return hasTimeOverlap(
-        scheduleData.startTime,
-        scheduleData.endTime,
-        s.startTime,
-        s.endTime
-      );
-    });
-    
-    if (instructorConflicts.length > 0) {
-      const conflictDetails = instructorConflicts.map(s => 
-        `${s.courseCode} (${s.startTime}-${s.endTime})`
-      ).join(', ');
-      conflicts.push(`Instructor has another class during this time: ${conflictDetails}`);
-    }
-
-    // Check if end time is after start time
-    if (scheduleData.endTime <= scheduleData.startTime) {
-      conflicts.push('End time must be after start time');
-    }
-    
-    return conflicts;
-  };
+  // Note: Conflict detection is now handled by the backend
 
   const resetForm = () => {
     setFormData({

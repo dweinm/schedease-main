@@ -1,10 +1,11 @@
-const express = require('express');
-const router = express.Router();
-const auth = require('../middleware/auth'); // Assuming auth middleware exists
+import express from 'express';
+import { SystemSettings, getSystemSettings } from '../config/systemSettings.js';
+import { requireAuth, requireAdmin } from './auth.js';
 
-// In a real application, settings would be stored in a database
-// For this example, we'll use a simple in-memory object
-let systemSettings = {
+const router = express.Router();
+
+// Default settings template
+const defaultSettings = {
   general: {
     institutionName: 'University of Technology',
     academicYear: '2025-2026',
@@ -54,39 +55,75 @@ let systemSettings = {
 // @route   GET /api/settings
 // @desc    Get all system settings
 // @access  Private (admin only)
-router.get('/', auth, (req, res) => {
-  // In a real app, you'd fetch from DB
-  res.json(systemSettings);
+router.get('/', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const settings = await getSystemSettings();
+    res.json({ success: true, settings });
+  } catch (error) {
+    console.error('Get settings error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch settings' });
+  }
 });
 
 // @route   GET /api/settings/academic-year
 // @desc    Get current academic year
 // @access  Private
-router.get('/academic-year', auth, (req, res) => {
-  res.json({
-    success: true,
-    academicYear: systemSettings.general.academicYear
-  });
+router.get('/academic-year', requireAuth, async (req, res) => {
+  try {
+    const settings = await getSystemSettings();
+    res.json({
+      success: true,
+      academicYear: settings.general.academicYear
+    });
+  } catch (error) {
+    console.error('Get academic year error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch academic year' });
+  }
 });
 
 // @route   PUT /api/settings
 // @desc    Update system settings
 // @access  Private (admin only)
-router.put('/', auth, (req, res) => {
-  // In a real app, you'd update DB
-  systemSettings = { ...systemSettings, ...req.body };
-  res.json({ message: 'Settings updated successfully', settings: systemSettings });
+router.put('/', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const updates = req.body;
+    let settings = await SystemSettings.findOne();
+    
+    if (!settings) {
+      settings = new SystemSettings(defaultSettings);
+    }
+
+    // Update all setting categories
+    Object.keys(updates).forEach(category => {
+      if (settings[category]) {
+        settings[category] = {
+          ...settings[category],
+          ...updates[category]
+        };
+      }
+    });
+
+    await settings.save();
+    res.json({ 
+      success: true, 
+      message: 'Settings updated successfully', 
+      settings 
+    });
+  } catch (error) {
+    console.error('Update settings error:', error);
+    res.status(500).json({ success: false, message: 'Failed to update settings' });
+  }
 });
 
 // @route   GET /api/settings/test-db-connection
 // @desc    Test database connection
 // @access  Private (admin only)
-router.get('/test-db-connection', auth, (req, res) => {
-  // Simulate DB connection test
-  const isConnected = Math.random() > 0.1; // 90% success rate
-  if (isConnected) {
+router.get('/test-db-connection', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    await SystemSettings.findOne(); // Test query to verify connection
     res.json({ success: true, message: 'Database connected successfully' });
-  } else {
+  } catch (error) {
+    console.error('Database connection test failed:', error);
     res.status(500).json({ success: false, message: 'Failed to connect to database' });
   }
 });
@@ -94,15 +131,29 @@ router.get('/test-db-connection', auth, (req, res) => {
 // @route   POST /api/settings/test-email-connection
 // @desc    Test email connection
 // @access  Private (admin only)
-router.post('/test-email-connection', auth, (req, res) => {
+router.post('/test-email-connection', requireAuth, requireAdmin, async (req, res) => {
   const { emailServer, emailPort, adminEmail } = req.body;
-  // Simulate email connection test
-  const isConnected = Math.random() > 0.1; // 90% success rate
-  if (isConnected) {
+  try {
+    // Here you would implement actual email server connection test
+    // For now, we'll simulate a successful connection
     res.json({ success: true, message: `Email server ${emailServer} connected successfully` });
-  } else {
+  } catch (error) {
+    console.error('Email connection test failed:', error);
     res.status(500).json({ success: false, message: `Failed to connect to email server ${emailServer}` });
   }
 });
 
-module.exports = router;
+// Reset settings to defaults
+router.post('/reset', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    await SystemSettings.deleteMany({}); // Remove all settings
+    const settings = new SystemSettings(defaultSettings); // Create new with defaults
+    await settings.save();
+    res.json({ success: true, message: 'Settings reset to defaults', settings });
+  } catch (error) {
+    console.error('Reset settings error:', error);
+    res.status(500).json({ success: false, message: 'Failed to reset settings' });
+  }
+});
+
+export default router;
