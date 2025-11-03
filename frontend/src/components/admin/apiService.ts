@@ -1,17 +1,6 @@
-// API service for SchedEase frontend
-const API_BASE_URL = 'http://localhost:3001/api';
+import { Enrollment, EnrolledStudent, ScheduleSummary, EnrollmentFilters, EnrollmentPayload, EnrollmentResponse } from '../../types/enrollment';
 
-export interface Enrollment {
-  id: string;
-  studentId: string;
-  courseId: string;
-  studentName?: string;
-  courseName?: string;
-  semester?: string;
-  status: 'pending' | 'approved' | 'rejected';
-  createdAt: string;
-  updatedAt: string;
-}
+const API_BASE_URL = 'http://localhost:3001/api';
 
 interface Schedule {
   dayOfWeek: string;
@@ -120,12 +109,19 @@ class ApiService {
         headers,
       });
 
+      const data = await response.json();
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || response.statusText || 'Request failed');
+        if (data.conflicts) {
+          // Special handling for schedule conflicts
+          throw {
+            ...data,
+            message: data.message || 'Schedule conflict detected',
+            status: response.status
+          };
+        }
+        throw new Error(data.message || response.statusText || 'Request failed');
       }
 
-      const data = await response.json();
       return data;
     } catch (error) {
       console.error(`API Error (${path}):`, error);
@@ -437,6 +433,10 @@ class ApiService {
     return this.makeRequest('/users');
   }
 
+  async getAdminStudents() {
+    return this.makeRequest('/admin/students');
+  }
+
   async getUserById(id: string) {
     return this.makeRequest(`/users/${id}`);
   }
@@ -470,7 +470,28 @@ class ApiService {
   // Enrollment endpoints
   // --------------------
   async getEnrollments() {
-    return this.makeRequest<Enrollment[]>('/enrollments');
+    return this.makeRequest<{ success: boolean; enrollments: Enrollment[] }>('/enrollments');
+  }
+
+  async getEnrolledStudents(filters?: EnrollmentFilters) {
+    const params = new URLSearchParams();
+    if (filters) {
+      Object.entries(filters).forEach(([key, value]) => {
+        if (value && value !== 'all') {
+          params.append(key, value);
+        }
+      });
+    }
+    return this.makeRequest<{ success: boolean; data: EnrolledStudent[] }>(
+      `/enrollments/students${params.toString() ? '?' + params.toString() : ''}`
+    );
+  }
+
+  async createEnrollment(data: EnrollmentPayload) {
+    return this.makeRequest<EnrollmentResponse>('/enrollments', {
+      method: 'POST',
+      body: JSON.stringify(data)
+    });
   }
 
   async processEnrollment(enrollmentId: string, action: 'approve' | 'reject', notes?: string) {
@@ -478,6 +499,23 @@ class ApiService {
       method: 'POST',
       body: JSON.stringify({ notes })
     });
+  }
+
+  // --------------------
+  // Schedule Summary endpoints
+  // --------------------
+  async getScheduleSummaries(filters?: EnrollmentFilters) {
+    const params = new URLSearchParams();
+    if (filters) {
+      Object.entries(filters).forEach(([key, value]) => {
+        if (value && value !== 'all') {
+          params.append(key, value);
+        }
+      });
+    }
+    return this.makeRequest<{ success: boolean; data: ScheduleSummary[] }>(
+      `/schedules/summaries${params.toString() ? '?' + params.toString() : ''}`
+    );
   }
 
   // --------------------

@@ -88,37 +88,4 @@ export async function getCurrentUser(req, res) {
   }
 }
 
-// Middleware to verify authentication
-export function requireAuth(req, res, next) {
-  const authHeader = req.headers.authorization;
-  const token = authHeader && authHeader.split(' ')[1];
-
-  if (!token) {
-    return res.status(401).json({ 
-      success: false, 
-      message: 'No token provided' 
-    });
-  }
-
-  const decoded = verifyToken(token);
-  if (!decoded) {
-    return res.status(401).json({ 
-      success: false, 
-      message: 'Invalid token' 
-    });
-  }
-
-  req.user = decoded;
-  next();
-}
-
-// Middleware to verify admin role
-export function requireAdmin(req, res, next) {
-  if (req.user.role !== 'admin') {
-    return res.status(403).json({ 
-      success: false, 
-      message: 'Admin access required' 
-    });
-  }
-  next();
-}
+// Auth middleware now imported from utils/auth.js

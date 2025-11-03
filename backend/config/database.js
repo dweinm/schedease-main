@@ -5,11 +5,11 @@ import bcrypt from 'bcryptjs';
 const dbConfig = {
   mongoUri: process.env.MONGODB_URI || 'mongodb://localhost:27017/schedease_db',
   options: {
-    // useNewUrlParser: true,
-    // useUnifiedTopology: true,
-    serverSelectionTimeoutMS: 5000, // Keep trying to send operations for 5 seconds
-    socketTimeoutMS: 45000, // Close sockets after 45 seconds of inactivity
-    family: 4 // Use IPv4, skip trying IPv6
+    serverSelectionTimeoutMS: 5000,
+    socketTimeoutMS: 45000,
+    family: 4,
+    retryWrites: true,
+    w: 'majority'
   }
 };
 
@@ -19,22 +19,47 @@ let isConnected = false;
 export async function initializeDatabase() {
   try {
     if (isConnected) {
-      console.log('Database already connected');
+      console.log('📊 Database already connected');
       return mongoose.connection;
     }
 
-    // Connect to MongoDB
-    await mongoose.connect(dbConfig.mongoUri, dbConfig.options);
+    console.log('🔄 Connecting to MongoDB...');
+    
+    // Connect to MongoDB with retry logic
+    let retries = 3;
+    while (retries > 0) {
+      try {
+        await mongoose.connect(dbConfig.mongoUri, dbConfig.options);
+        break;
+      } catch (err) {
+        retries--;
+        if (retries === 0) throw err;
+        console.log(`⚠️ Connection attempt failed. Retrying... (${retries} attempts left)`);
+        await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds before retrying
+      }
+    }
     
     isConnected = true;
-    console.log('MongoDB connected successfully');
+    console.log('✅ MongoDB connected successfully');
+    
+    // Test the connection
+    await mongoose.connection.db.admin().ping();
+    console.log('🔵 Database ping successful');
 
     // Initialize collections and seed data
     await seedDatabase();
+    console.log('🌱 Database seeded successfully');
     
     return mongoose.connection;
   } catch (error) {
-    console.error('Database initialization failed:', error);
+    console.error('❌ Database initialization failed:', error);
+    if (error.name === 'MongooseServerSelectionError') {
+      console.error('💡 Possible reasons:');
+      console.error('   1. MongoDB service is not running');
+      console.error('   2. Connection string is incorrect');
+      console.error('   3. Network connectivity issues');
+      console.error('   4. Firewall blocking the connection');
+    }
     throw error;
   }
 }
@@ -212,9 +237,39 @@ const courseSchema = new mongoose.Schema({
     type: String,
     trim: true
   }],
+  // Optional reference to an Instructor profile
+  instructorId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Instructor'
+  },
+  // Denormalized instructor name for quick display on frontend
+  instructorName: {
+    type: String,
+    trim: true
+  },
   createdAt: {
     type: Date,
     default: Date.now
+  }
+});
+
+// Pre-save middleware to denormalize instructorName from Instructor -> User
+courseSchema.pre('save', async function(next) {
+  try {
+    // If an instructorId is set, populate the instructor's user name
+    if (this.instructorId) {
+      // Use the Instructor model to look up the linked User's name
+      const InstructorModel = mongoose.model('Instructor');
+      const instr = await InstructorModel.findById(this.instructorId).populate('userId');
+      if (instr && instr.userId && instr.userId.name) {
+        this.instructorName = instr.userId.name;
+      }
+    } else {
+      this.instructorName = undefined;
+    }
+    next();
+  } catch (err) {
+    next(err);
   }
 });
 
@@ -286,76 +341,7 @@ const studentSchema = new mongoose.Schema({
   }
 });
 
-// Schedule Schema
-const scheduleSchema = new mongoose.Schema({
-  courseId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Course',
-    required: true
-  },
-  courseCode: {
-    type: String,
-    required: true,
-    trim: true
-  },
-  courseName: {
-    type: String,
-    required: true,
-    trim: true
-  },
-  instructorId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Instructor',
-    required: true
-  },
-  instructorName: {
-    type: String,
-    required: true,
-    trim: true
-  },
-  roomId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Room',
-    required: true
-  },
-  roomName: {
-    type: String,
-    required: true,
-    trim: true
-  },
-  building: {
-    type: String,
-    required: true,
-    trim: true
-  },
-  dayOfWeek: {
-    type: String,
-    enum: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'],
-    required: true
-  },
-  startTime: {
-    type: String,
-    required: true
-  },
-  endTime: {
-    type: String,
-    required: true
-  },
-  semester: {
-    type: String,
-    required: true,
-    trim: true
-  },
-  academicYear: {
-    type: String,
-    required: true,
-    trim: true
-  },
-  createdAt: {
-    type: Date,
-    default: Date.now
-  }
-});
+// Student enrollments and schedule data moved to their respective schema sections
 
 // Schedule Request Schema
 const scheduleRequestSchema = new mongoose.Schema({
@@ -372,6 +358,34 @@ const scheduleRequestSchema = new mongoose.Schema({
   courseId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Course'
+  },
+  // Room for which the request is made (room booking)
+  roomId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Room'
+  },
+  // Specific date for the request (YYYY-MM-DD)
+  date: {
+    type: String
+  },
+  startTime: {
+    type: String
+  },
+  endTime: {
+    type: String
+  },
+  purpose: {
+    type: String,
+    trim: true
+  },
+  notes: {
+    type: String,
+    trim: true
+  },
+  // Flag set when a conflict with an approved request is detected
+  conflict_flag: {
+    type: Boolean,
+    default: false
   },
   details: {
     type: String,
@@ -393,15 +407,127 @@ const scheduleRequestSchema = new mongoose.Schema({
   }
 });
 
-// Create Models
+// Schedule Schema
+const scheduleSchema = new mongoose.Schema({
+  courseId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Course',
+    required: true
+  },
+  instructorId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Instructor',
+    required: true
+  },
+  roomId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Room',
+    required: true
+  },
+  dayOfWeek: {
+    type: String,
+    required: true,
+    enum: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+  },
+  startTime: {
+    type: String,
+    required: true
+  },
+  endTime: {
+    type: String,
+    required: true
+  },
+  semester: {
+    type: String,
+    required: true,
+    enum: ['First Term', 'Second Term', 'Third Term']
+  },
+  year: {
+    type: Number,
+    required: true
+  },
+  academicYear: {
+    type: String,
+    required: true
+  },
+  status: {
+    type: String,
+    enum: ['draft', 'published', 'conflict', 'canceled'],
+    default: 'published'
+  },
+  conflicts: [{
+    type: String
+  }],
+  // Denormalized fields for easier querying
+  courseCode: String,
+  courseName: String,
+  instructorName: String,
+  roomName: String,
+  building: String,
+  createdAt: {
+    type: Date,
+    default: Date.now
+  },
+  updatedAt: {
+    type: Date,
+    default: Date.now
+  }
+});
+
+// Pre-save middleware to update the updatedAt timestamp
+scheduleSchema.pre('save', function(next) {
+  this.updatedAt = new Date();
+  next();
+});
+
+// Enrollment Schema - links students to courses/schedules/instructors
+const enrollmentSchema = new mongoose.Schema({
+  studentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', required: true },
+  courseId: { type: mongoose.Schema.Types.ObjectId, ref: 'Course', required: true },
+  scheduleId: { type: mongoose.Schema.Types.ObjectId, ref: 'Schedule' },
+  instructorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Instructor' },
+  yearLevel: { type: String, enum: ['1','2','3','4'] },
+  section: { type: String },
+  // Denormalized fields for quick access
+  studentName: { type: String },
+  courseName: { type: String },
+  courseCode: { type: String },
+  createdAt: { type: Date, default: Date.now }
+});
+
+// Pre-save middleware to populate denormalized fields
+enrollmentSchema.pre('save', async function(next) {
+  try {
+    if (this.isNew || this.isModified('studentId') || this.isModified('courseId')) {
+      // Populate student name
+      const student = await mongoose.model('Student').findById(this.studentId).populate('userId');
+      if (student && student.userId) {
+        this.studentName = student.userId.name;
+      }
+
+      // Populate course details
+      const course = await mongoose.model('Course').findById(this.courseId);
+      if (course) {
+        this.courseName = course.name;
+        this.courseCode = course.code;
+      }
+    }
+    next();
+  } catch (err) {
+    next(err);
+  }
+});
+
+//Create Models
 export const User = mongoose.model('User', userSchema);
 export const Department = mongoose.model('Department', departmentSchema);
 export const Room = mongoose.model('Room', roomSchema);
 export const Course = mongoose.model('Course', courseSchema);
+export const Schedule = mongoose.model('Schedule', scheduleSchema);
 export const Instructor = mongoose.model('Instructor', instructorSchema);
 export const Student = mongoose.model('Student', studentSchema);
-export const Schedule = mongoose.model('Schedule', scheduleSchema);
 export const ScheduleRequest = mongoose.model('ScheduleRequest', scheduleRequestSchema);
+export const Enrollment = mongoose.model('Enrollment', enrollmentSchema);
 
 export async function seedDatabase() {
   try {
@@ -636,7 +762,8 @@ export async function seedDatabase() {
             dayOfWeek: 'Monday',
             startTime: '09:00',
             endTime: '10:30',
-            semester: 'Fall 2024',
+            semester: 'First Term',
+            year: 2024,
             academicYear: '2024-2025'
           },
           {
@@ -646,7 +773,8 @@ export async function seedDatabase() {
             dayOfWeek: 'Tuesday',
             startTime: '14:00',
             endTime: '16:00',
-            semester: 'Fall 2024',
+            semester: 'First Term',
+            year: 2024,
             academicYear: '2024-2025'
           },
           {
@@ -656,7 +784,8 @@ export async function seedDatabase() {
             dayOfWeek: 'Wednesday',
             startTime: '11:00',
             endTime: '12:15',
-            semester: 'Fall 2024',
+            semester: 'First Term',
+            year: 2024,
             academicYear: '2024-2025'
           }
         ];
@@ -700,5 +829,6 @@ export default {
   Instructor,
   Student,
   Schedule,
-  ScheduleRequest
+  ScheduleRequest,
+  Enrollment
 };

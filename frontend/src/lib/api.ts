@@ -102,7 +102,14 @@ class ApiClient {
     this.setToken(null);
   }
 
+    // Admin methods
+  async getAdminStudents() {
+    return this.request<{ success: boolean; students: any[] }>('/admin/students');
+  }
+
+  // --------------------
   // Course methods
+  // --------------------
   async getCourses() {
     return this.request<{ success: boolean; courses: any[] }>('/courses');
   }
@@ -195,6 +202,32 @@ class ApiClient {
   async deleteSchedule(id: string) {
     return this.request<{ success: boolean; message: string }>(`/schedules/${id}`, {
       method: 'DELETE',
+    });
+  }
+
+  // Enrollment methods
+  async getEnrollments() {
+    return this.request<{ success: boolean; enrollments: any[] }>('/enrollments');
+  }
+
+  async getMyEnrollments() {
+    return this.request<{ success: boolean; enrollments: any[] }>('/enrollments/me');
+  }
+
+  async getInstructorEnrollments(instructorId: string) {
+    return this.request<{ success: boolean; enrollments: any[] }>(`/enrollments/instructor/${instructorId}`);
+  }
+
+  async createEnrollment(enrollmentData: any) {
+    return this.request<{ success: boolean; message?: string; created?: any[] }>('/enrollments', {
+      method: 'POST',
+      body: JSON.stringify(enrollmentData)
+    });
+  }
+
+  async deleteEnrollment(id: string) {
+    return this.request<{ success: boolean; message?: string }>(`/enrollments/${id}`, {
+      method: 'DELETE'
     });
   }
 

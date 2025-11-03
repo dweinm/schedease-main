@@ -44,7 +44,7 @@ export async function getAvailableRooms(req, res) {
     }
     
     if (equipment) {
-      const equipmentList = Array.isArray(equipment) ? equipment : [equipment];
+      const equipmentList = typeof equipment === 'string' ? equipment.split(',') : Array.isArray(equipment) ? equipment : [equipment];
       filter.equipment = { $in: equipmentList };
     }
 

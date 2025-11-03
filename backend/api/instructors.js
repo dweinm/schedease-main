@@ -1,7 +1,7 @@
 import { Instructor, User } from '../config/database.js';
 
 // Get all instructors with populated user data
-export async function getInstructors(req, res) {
+export const getInstructors = async (req, res) => {
   try {
     const instructors = await Instructor.find()
       .populate('userId', 'name email department')
@@ -28,7 +28,7 @@ export async function getInstructors(req, res) {
 }
 
 // Get instructor by ID
-export async function getInstructorById(req, res) {
+export const getInstructorById = async (req, res) => {
   try {
     const { id } = req.params;
     

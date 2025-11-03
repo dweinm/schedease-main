@@ -20,6 +20,4 @@ export async function getStudents(req, res) {
   }
 }
 
-export default {
-  getStudents
-};
+// Using named exports only
