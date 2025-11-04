@@ -3,7 +3,7 @@ import { Course } from '../config/database.js';
 // Get all courses
 export async function getCourses(req, res) {
   try {
-    const courses = await Course.find().sort({ code: 1 });
+    const courses = await Course.find().sort({ code: 1 }).populate({ path: 'instructorId', populate: { path: 'userId', model: 'User' } });
     res.json({ success: true, courses });
   } catch (error) {
     console.error('Get courses error:', error);
@@ -15,7 +15,7 @@ export async function getCourses(req, res) {
 export async function getCourseById(req, res) {
   try {
     const { id } = req.params;
-    const course = await Course.findById(id);
+    const course = await Course.findById(id).populate({ path: 'instructorId', populate: { path: 'userId', model: 'User' } });
     
     if (!course) {
       return res.status(404).json({ success: false, message: 'Course not found' });
@@ -42,10 +42,13 @@ export async function createCourse(req, res) {
     const course = new Course(courseData);
     const savedCourse = await course.save();
 
+    // Populate instructor info for response
+    const populated = await Course.findById(savedCourse._id).populate({ path: 'instructorId', populate: { path: 'userId', model: 'User' } });
+
     res.status(201).json({ 
       success: true, 
       message: 'Course created successfully',
-      course: savedCourse 
+      course: populated || savedCourse 
     });
   } catch (error) {
     console.error('Create course error:', error);
@@ -80,10 +83,13 @@ export async function updateCourse(req, res) {
       return res.status(404).json({ success: false, message: 'Course not found' });
     }
 
+    // Return populated course
+    const populated = await Course.findById(course._id).populate({ path: 'instructorId', populate: { path: 'userId', model: 'User' } });
+
     res.json({ 
       success: true, 
       message: 'Course updated successfully',
-      course 
+      course: populated || course 
     });
   } catch (error) {
     console.error('Update course error:', error);

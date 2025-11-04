@@ -6,7 +6,7 @@ import { Label } from '../ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table';
 import { Badge } from '../ui/badge';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '../ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../ui/dialog';
 import { LoadingSpinner } from '../ui/LoadingSpinner';
 import { Plus, Edit, Trash2, Search } from 'lucide-react';
 import { apiService } from '../services/api';
@@ -21,12 +21,14 @@ interface Course {
   credits: number;
   type: string;
   duration: number;
-  instructor?: string;
+  instructorId?: string;
+  instructorName?: string;
   capacity?: number;
 }
 
 export function CoursesManagement() {
   const [courses, setCourses] = useState<Course[]>([]);
+  const [instructors, setInstructors] = useState<Array<{ _id: string; name: string }>>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -38,7 +40,9 @@ export function CoursesManagement() {
     credits: 3,
     type: 'lecture',
     duration: 90,
-    capacity: 30
+    capacity: 30,
+    instructorId: '',
+    instructorName: ''
   });
 
   useEffect(() => {
@@ -48,13 +52,38 @@ export function CoursesManagement() {
   const loadCourses = async () => {
     try {
       setLoading(true);
+      // load instructors for select
+      try {
+        const instRes = await apiService.getInstructors();
+        const instList = instRes?.instructors || instRes?.data || instRes || [];
+        setInstructors(instList.map((i: any) => ({ _id: i._id || i.id, name: i.name || i.userId?.name || i.user?.name })));
+      } catch (err) {
+        console.warn('Failed to load instructors:', err);
+      }
       const response = await apiService.getCourses();
-      // Map backend fields to frontend fields
-      const mappedCourses = (response.courses || response.data || []).map((course: any) => ({
-        ...course,
-        courseCode: course.code,
-        courseName: course.name,
-      }));
+      console.log('Courses response:', response); // Debug log
+
+      // Map backend fields to frontend fields consistently
+      const mappedCourses = (response.courses || response.data || []).map((course: any) => {
+        console.log('Mapping course:', course); // Debug each course
+        return {
+          _id: course._id || course.id,
+          courseCode: course.code || course.courseCode || '',
+          courseName: course.name || course.courseName || '',
+          department: course.department || '',
+          credits: course.credits || 3,
+          type: course.type || 'lecture',
+          duration: course.duration || 90,
+          capacity: course.requiredCapacity || course.capacity || 30,
+          // normalize instructor field (backend returns populated instructor document)
+          instructorId: course.instructorId?._id || (typeof course.instructorId === 'string' ? course.instructorId : '') || (course.instructor?._id || (typeof course.instructor === 'string' ? course.instructor : '')) || '',
+          instructorName: course.instructorName ||
+                          course.instructorId?.userId?.name ||
+                          course.instructorId?.user?.name ||
+                          course.instructor?.name ||
+                          ''
+        };
+      });
       setCourses(mappedCourses);
     } catch (error) {
       console.error('Failed to load courses:', error);
@@ -68,61 +97,97 @@ export function CoursesManagement() {
     e.preventDefault();
     
     try {
+      // Validate required fields
+      if (!formData.courseCode || !formData.courseName || !formData.department) {
+        toast.error('Please fill in all required fields');
+        return;
+      }
+
+      // Convert form data to API payload
       const payload = {
-        code: formData.courseCode,
-        name: formData.courseName,
-        department: formData.department,
-        credits: formData.credits,
-        type: formData.type,
-        duration: formData.duration,
-        requiredCapacity: formData.capacity,
-        instructor: formData.instructor,
+        code: formData.courseCode.trim().toUpperCase(), // Ensure consistent course code format
+        name: formData.courseName.trim(),
+        department: formData.department.trim(),
+        credits: Number(formData.credits) || 3,
+        type: formData.type || 'lecture',
+        duration: Number(formData.duration) || 90,
+        requiredCapacity: Number(formData.capacity) || 30,
+        instructorId: formData.instructorId ? formData.instructorId : null,
+        instructorName: formData.instructorName || ''
       };
 
-      if (editingCourse) {
-        await apiService.updateCourse(editingCourse._id || editingCourse.id || '', payload);
-        toast.success('Course updated successfully');
-      } else {
-        await apiService.createCourse(payload);
-        toast.success('Course created successfully');
-      }
+      console.log('Starting course save...', { 
+        isEdit: !!editingCourse?._id,
+        payload 
+      });
       
+      // Make API call
+      const response = editingCourse?._id 
+        ? await apiService.updateCourse(editingCourse._id, payload)
+        : await apiService.createCourse(payload);
+      
+      console.log('API Response:', response);
+      
+      if (!response || !response.success) {
+        throw new Error(response?.message || 'Operation failed');
+      }
+
+      // Success path
+      toast.success(editingCourse ? 'Course updated successfully' : 'Course created successfully');
       setIsDialogOpen(false);
       setEditingCourse(null);
       resetForm();
-      loadCourses();
-    } catch (error) {
-      console.error('Failed to save course:', error);
-      toast.error('Failed to save course');
+      await loadCourses();
+
+    } catch (error: any) {
+      console.error('Save failed:', error);
+      toast.error(error.message || 'Failed to save course');
     }
   };
 
   const handleEdit = (course: Course) => {
-    setEditingCourse(course);
-    setFormData({
-      courseCode: course.courseCode || course.courseCode || '',
-      courseName: course.courseName || course.courseName || '',
+    if (!course) return;
+
+    const formValues = {
+      courseCode: course.courseCode || '',
+      courseName: course.courseName || '',
       department: course.department || '',
       credits: course.credits || 3,
       type: course.type || 'lecture',
       duration: course.duration || 90,
-      capacity: course.capacity ?? 30,
-      instructor: course.instructor || '',
+      capacity: course.capacity || 30,
+      // instructor field is already normalized in our mapped data
+      instructorId: course.instructorId || '',
+      instructorName: course.instructorName || '',
       _id: course._id,
       id: course.id,
-    });
+    };
+
+    setFormData(formValues);
+    setEditingCourse(course);
     setIsDialogOpen(true);
   };
 
   const handleDelete = async (courseId: string) => {
+    if (!courseId) {
+      toast.error('Invalid course ID');
+      return;
+    }
+
     if (window.confirm('Are you sure you want to delete this course?')) {
       try {
-        await apiService.deleteCourse(courseId);
-        toast.success('Course deleted successfully');
-        loadCourses();
+        const response = await apiService.deleteCourse(courseId);
+        
+        if (response?.success !== false) {
+          toast.success('Course deleted successfully');
+          await loadCourses(); // Refresh list after successful delete
+        } else {
+          throw new Error(response?.message || 'Failed to delete course');
+        }
       } catch (error) {
-        console.error('Failed to delete course:', error);
-        toast.error('Failed to delete course');
+        const message = error instanceof Error ? error.message : 'Failed to delete course';
+        console.error('Delete course error:', error);
+        toast.error(message);
       }
     }
   };
@@ -137,12 +202,6 @@ export function CoursesManagement() {
       duration: 90,
       capacity: 30
     });
-  };
-
-  const openCreateDialog = () => {
-    setEditingCourse(null);
-    resetForm();
-    setIsDialogOpen(true);
   };
 
   const filteredCourses = courses.filter(course =>
@@ -189,14 +248,29 @@ export function CoursesManagement() {
               />
             </div>
             
-            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-              <DialogTrigger asChild>
-                <Button onClick={openCreateDialog} className="bg-gray-900 hover:bg-gray-800 text-white">
-                  <Plus className="h-4 w-4 mr-2" />
-                  Add Course
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="sm:max-w-[425px] bg-white">
+            <Button 
+              onClick={() => {
+                setEditingCourse(null);
+                resetForm();
+                setIsDialogOpen(true);
+              }} 
+              className="bg-gray-900 hover:bg-gray-800 text-white"
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              Add Course
+            </Button>
+
+            <Dialog 
+              open={isDialogOpen} 
+              onOpenChange={(open) => {
+                if (!open) {
+                  setIsDialogOpen(false);
+                  setEditingCourse(null);
+                  resetForm();
+                }
+              }}
+            >
+              <DialogContent className="bg-white">
                 <DialogHeader>
                   <DialogTitle>
                     {editingCourse ? 'Edit Course' : 'Add New Course'}
@@ -253,12 +327,40 @@ export function CoursesManagement() {
                     />
                   </div>
                   
+                  <div>
+                    <Label htmlFor="instructor">Instructor</Label>
+                    <Select 
+                      value={formData.instructorId || "unassigned"} 
+                      onValueChange={(value) => {
+                        if (value === 'unassigned') {
+                          setFormData({ ...formData, instructorId: '', instructorName: '' });
+                        } else {
+                          const sel = instructors.find(i => i._id === value);
+                          setFormData({ ...formData, instructorId: value, instructorName: sel?.name || '' });
+                        }
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select an instructor" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-white border border-gray-200 shadow-lg">
+                        <SelectItem value="unassigned">No Instructor</SelectItem>
+                        {instructors.map(inst => (
+                          <SelectItem key={inst._id} value={inst._id}>{inst.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <Label htmlFor="type">Type</Label>
-                      <Select value={formData.type} onValueChange={(value) => setFormData({ ...formData, type: value })}>
+                      <Select 
+                        value={formData.type || "lecture"} 
+                        onValueChange={(value) => setFormData({ ...formData, type: value })}
+                      >
                         <SelectTrigger>
-                          <SelectValue />
+                          <SelectValue placeholder="Select course type" />
                         </SelectTrigger>
                         <SelectContent className="bg-white border border-gray-200 shadow-lg">
                           <SelectItem value="lecture">Lecture</SelectItem>
@@ -290,7 +392,7 @@ export function CoursesManagement() {
                     </Button>
                   </div>
                 </form>
-              </DialogContent>
+                </DialogContent>
             </Dialog>
           </div>
 
@@ -301,6 +403,7 @@ export function CoursesManagement() {
                   <TableHead>Course Code</TableHead>
                   <TableHead>Course Name</TableHead>
                   <TableHead>Department</TableHead>
+                  <TableHead>Instructor</TableHead>
                   <TableHead>Type</TableHead>
                   <TableHead>Credits</TableHead>
                   <TableHead>Duration</TableHead>
@@ -313,6 +416,7 @@ export function CoursesManagement() {
                     <TableCell className="font-medium">{course.courseCode}</TableCell>
                     <TableCell>{course.courseName}</TableCell>
                     <TableCell>{course.department}</TableCell>
+                    <TableCell>{course.instructorName || (instructors.find(i => i._id === course.instructorId)?.name) || 'Unassigned'}</TableCell>
                     <TableCell>
                       <Badge className={getTypeColor(course.type)}>
                         {course.type}

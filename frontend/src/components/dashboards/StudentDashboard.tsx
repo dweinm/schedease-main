@@ -158,8 +158,45 @@ export function StudentDashboard() {
   const loadStudentData = async () => {
     try {
       setLoading(true);
-      
-      // Mock data - in real app, these would be API calls
+      // Try fetching real enrollments and build courses/schedules from them
+      try {
+        const res = await (await import('../../lib/api')).apiClient.getMyEnrollments();
+        if (res?.enrollments && Array.isArray(res.enrollments) && res.enrollments.length > 0) {
+          const enrollments = res.enrollments;
+          // Build courses and schedules arrays from enrollments
+          const coursesFromEnroll = enrollments.map((e: any) => ({
+            _id: e.courseId?._id || e.courseId,
+            code: e.courseId?.code || e.courseCode || '',
+            name: e.courseId?.name || e.courseName || '',
+            instructor: e.instructorId?.userId?.name || e.instructorId?.name || e.instructorName || '',
+            credits: e.courseId?.credits || 3,
+            type: e.courseId?.type || 'lecture',
+            description: e.courseId?.description || ''
+          }));
+
+          const schedulesFromEnroll: Schedule[] = enrollments.map((e: any) => ({
+            _id: e.scheduleId?._id || e._id,
+            courseId: e.courseId?._id || e.courseId,
+            courseName: e.courseId?.name || e.courseName || '',
+            courseCode: e.courseId?.code || e.courseCode || '',
+            instructor: e.instructorId?.userId?.name || e.instructorId?.name || e.instructorName || '',
+            roomName: e.scheduleId?.roomName || e.roomName || '',
+            building: e.scheduleId?.building || e.building || '',
+            dayOfWeek: e.scheduleId?.dayOfWeek || e.dayOfWeek || '',
+            startTime: e.scheduleId?.startTime || e.startTime || '',
+            endTime: e.scheduleId?.endTime || e.endTime || ''
+          }));
+
+          setCourses(coursesFromEnroll);
+          setSchedules(schedulesFromEnroll);
+          setLoading(false);
+          return;
+        }
+      } catch (err) {
+        console.warn('Failed to load enrollments, falling back to mock data', err);
+      }
+
+      // Mock data - fallback when API is unavailable
       const mockSchedules: Schedule[] = [
         {
           _id: '1',

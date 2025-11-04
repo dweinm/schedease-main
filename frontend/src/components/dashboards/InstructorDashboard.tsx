@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import apiService from '../services/api';
 import { DashboardLayout } from '../layout/DashboardLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
 import { Badge } from '../ui/badge';
@@ -66,6 +67,15 @@ interface Student {
   performance?: 'excellent' | 'good' | 'average' | 'needs_improvement';
 }
 
+interface Room {
+  _id: string;
+  name: string;
+  building: string;
+  capacity: number;
+  equipment?: string[];
+  type?: string;
+}
+
 interface ScheduleRequest {
   _id: string;
   type: 'room_change' | 'time_change' | 'schedule_conflict';
@@ -85,13 +95,49 @@ interface Availability {
   Saturday: { startTime: string; endTime: string }[];
 }
 
+interface InstructorUser {
+  _id?: string;
+  id?: string;
+  name: string;
+  email: string;
+  role: 'instructor';
+  department?: string;
+}
+
+interface InstructorProfile {
+  _id: string;
+  userId: string | InstructorUser;
+  maxHoursPerWeek: number;
+  specializations: string[];
+  availability: Record<string, { startTime: string; endTime: string }[]>;
+}
+
+interface RoomAvailability {
+  available: boolean;
+  conflicts: Array<{
+    roomId?: string;
+    startTime: string;
+    endTime: string;
+    courseName?: string;
+    instructorName?: string;
+  }>;
+}
+
+interface RoomFilters {
+  minCapacity: number;
+  equipment: string[];
+  building: string;
+}
+
 export function InstructorDashboard() {
-  const { user } = useAuth();
+  const { user } = useAuth() as { user: InstructorUser };
   const [activeTab, setActiveTab] = useState('overview');
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
   const [requests, setRequests] = useState<ScheduleRequest[]>([]);
+  const [rooms, setRooms] = useState<Room[]>([]);
+  const [instructorProfileId, setInstructorProfileId] = useState<string | null>(null);
   const [availability] = useState<Availability>({
     Monday: [{ startTime: '09:00', endTime: '17:00' }],
     Tuesday: [{ startTime: '09:00', endTime: '17:00' }],
@@ -101,13 +147,54 @@ export function InstructorDashboard() {
     Saturday: []
   });
   const [loading, setLoading] = useState(true);
+  const [loadingRooms, setLoadingRooms] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCourse, setSelectedCourse] = useState<string>('all');
   const [showRequestDialog, setShowRequestDialog] = useState(false);
-  const [requestForm, setRequestForm] = useState({
-    type: '',
+  const [roomFilters, setRoomFilters] = useState({
+    minCapacity: 0,
+    equipment: [] as string[],
+    building: ''
+  });
+  const [favoriteRooms, setFavoriteRooms] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('favoriteRooms');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [roomAvailability, setRoomAvailability] = useState<Record<string, RoomAvailability>>({});
+  const [selectedRoomForDetails, setSelectedRoomForDetails] = useState<string | null>(null);
+  const [roomSchedule, setRoomSchedule] = useState<{
+    date: string;
+    schedules: Array<{
+      startTime: string;
+      endTime: string;
+      courseName?: string;
+      instructorName?: string;
+    }>;
+  } | null>(null);
+  interface RequestFormData {
+    courseId: string;
+    roomId: string;
+    date: string;
+    startTime: string;
+    endTime: string;
+    purpose: string;
+    notes: string;
+    type?: 'lecture' | 'lab' | 'seminar';
+  }
+
+  const [requestForm, setRequestForm] = useState<RequestFormData>({
     courseId: '',
-    details: ''
+    roomId: '',
+    date: '',
+    startTime: '',
+    endTime: '',
+    purpose: '',
+    notes: '',
+    type: 'lecture'
   });
 
   const sidebarItems = [
@@ -156,113 +243,92 @@ export function InstructorDashboard() {
   const loadInstructorData = async () => {
     try {
       setLoading(true);
-      
-      const mockSchedules: Schedule[] = [
-        {
-          _id: '4',
-          courseId: 'cs201',
-          courseName: 'Data Structures',
-          courseCode: 'CS201',
-          roomName: 'Room C-301',
-          dayOfWeek: 'Thursday',
-          startTime: '10:00',
-          endTime: '11:30',
-          studentsEnrolled: 38,
-          capacity: 40
-        }
-      ];
 
-      const mockCourses: Course[] = [
-        {
-          _id: 'cs101',
-          code: 'CS101',
-          name: 'Introduction to Computer Science',
-          department: 'Computer Science',
-          credits: 3,
-          type: 'lecture',
-          studentsEnrolled: 45,
-          description: 'Fundamental concepts of computer science including programming basics, algorithms, and data structures.'
-        },
-        {
-          _id: 'cs102',
-          code: 'CS102',
-          name: 'Programming Fundamentals Lab',
-          department: 'Computer Science',
-          credits: 1,
-          type: 'lab',
-          studentsEnrolled: 30,
-          description: 'Hands-on programming experience to complement CS101 theory.'
-        },
-        {
-          _id: 'cs201',
-          code: 'CS201',
-          name: 'Data Structures',
-          department: 'Computer Science',
-          credits: 4,
-          type: 'lecture',
-          studentsEnrolled: 38,
-          description: 'Advanced data structures and their implementations.'
-        }
-      ];
+      // First resolve the instructor profile for the logged-in user
+      if (user) {
+        try {
+          const instRes = await apiService.getInstructors();
+          // Normalize possible response shapes
+          let instructorsList: any[] = [];
+          if (instRes?.instructors) instructorsList = instRes.instructors;
+          else if (instRes?.data) instructorsList = instRes.data;
+          else if (Array.isArray(instRes)) instructorsList = instRes;
 
-      const mockStudents: Student[] = [
-        {
-          _id: '1',
-          name: 'Alex Smith',
-          email: 'student@university.edu',
-          studentId: 'ST2024001',
-          year: 2,
-          courses: ['cs101', 'cs102'],
-          attendance: 95,
-          performance: 'excellent'
-        },
-        {
-          _id: '2',
-          name: 'Maria Garcia',
-          email: 'student2@university.edu',
-          studentId: 'ST2024002',
-          year: 3,
-          courses: ['cs101', 'cs201'],
-          attendance: 88,
-          performance: 'good'
-        },
-        {
-          _id: '3',
-          name: 'James Wilson',
-          email: 'student3@university.edu',
-          studentId: 'ST2024003',
-          year: 1,
-          courses: ['cs101'],
-          attendance: 92,
-          performance: 'good'
-        }
-      ];
+          // Find instructor profile matching the logged-in user
+          const match = instructorsList.find((it: any) => {
+            const uid = it.userId?._id || it.userId;
+            return String(uid) === String(user._id || user.id);
+          });
 
-      const mockRequests: ScheduleRequest[] = [
-        {
-          _id: '1',
-          type: 'room_change',
-          courseId: 'cs101',
-          courseName: 'Introduction to Computer Science',
-          details: 'Request to change room from A-101 to larger auditorium due to increased enrollment',
-          status: 'pending',
-          createdAt: '2024-12-01T10:00:00Z'
-        },
-        {
-          _id: '2',
-          type: 'time_change',
-          courseId: 'cs102',
-          courseName: 'Programming Fundamentals Lab',
-          details: 'Request to move lab session from Tuesday to Friday afternoon',
-          status: 'under_review',
-          createdAt: '2024-11-28T14:30:00Z'
-        }
-      ];
+          if (match) {
+            const instructorId = match._id || match.id;
+            setInstructorProfileId(instructorId);
 
-      setSchedules(mockSchedules);
-      setCourses(mockCourses);
-      setStudents(mockStudents);
-      setRequests(mockRequests);
+            // Fetch instructor's courses
+            const coursesRes = await apiService.getCourses();
+            const allCourses = coursesRes?.courses || [];
+            
+            // Filter courses for this instructor
+            const instructorCourses = allCourses.filter((course: any) => 
+              course.instructorId === instructorId || course.instructor?._id === instructorId
+            );
+            setCourses(instructorCourses);
+
+            // Fetch instructor's schedules 
+            const res = await apiService.getSchedules();
+            const allSchedules = res?.schedules || [];
+            
+            // Filter schedules for this instructor and populate with course/room info
+            const instructorSchedules = allSchedules
+              .filter((schedule: any) => {
+                const sid = schedule.instructorId?._id || schedule.instructorId;
+                return String(sid) === String(instructorId);
+              })
+              .map((schedule: any) => ({
+                _id: schedule._id,
+                courseId: schedule.courseId?._id || schedule.courseId,
+                courseName: schedule.courseId?.name || schedule.courseName || '',
+                courseCode: schedule.courseId?.code || schedule.courseCode || '',
+                roomName: schedule.roomId?.name || schedule.roomName || '',
+                dayOfWeek: schedule.dayOfWeek,
+                startTime: schedule.startTime,
+                endTime: schedule.endTime,
+                semester: schedule.semester,
+                year: schedule.year,
+                studentsEnrolled: schedule.courseId?.studentsEnrolled || 0,
+                capacity: schedule.roomId?.capacity || 0
+              }));
+
+            setSchedules(instructorSchedules);
+
+            // Fetch instructor's schedule requests
+            const reqsRes = await apiService.getInstructorScheduleRequests(instructorId);
+            const fetchedRequests = reqsRes.data || [];
+            setRequests(fetchedRequests.map(normalizeScheduleRequest));
+          } else {
+            console.warn('No instructor profile found for user', user);
+            toast.error('Could not find your instructor profile');
+          }
+        } catch (err) {
+          console.error('Failed to load instructor data:', err);
+          toast.error('Failed to load your schedule');
+        }
+      }
+
+      // Load rooms for schedule requests
+      try {
+        setLoadingRooms(true);
+        const roomsRes = await apiService.getRooms();
+        if (roomsRes.success && Array.isArray(roomsRes.data)) {
+          setRooms(roomsRes.data);
+        }
+      } catch (err) {
+        console.warn('Failed to fetch rooms:', err);
+        toast.error('Failed to load available rooms');
+      } finally {
+        setLoadingRooms(false);
+      }
+
     } catch (error) {
       console.error('Failed to load instructor data:', error);
       toast.error('Failed to load your schedule');
@@ -275,23 +341,98 @@ export function InstructorDashboard() {
     e.preventDefault();
     
     try {
-      const newRequest: ScheduleRequest = {
-        _id: Date.now().toString(),
-        type: requestForm.type as any,
-        courseId: requestForm.courseId,
-        courseName: courses.find(c => c._id === requestForm.courseId)?.name || '',
-        details: requestForm.details,
-        status: 'pending',
-        createdAt: new Date().toISOString()
+      // Basic validation
+      const { courseId, roomId, date, startTime, endTime, purpose } = requestForm;
+      if (!courseId || !roomId || !date || !startTime || !endTime || !purpose) {
+        toast.error('Please fill in all required fields');
+        return;
+      }
+
+      // Validate time range
+      if (startTime >= endTime) {
+        toast.error('Start time must be before end time');
+        return;
+      }
+
+      const requestData = {
+        ...requestForm,
+        // Always use the instructor profile ID for scheduling
+        instructorId: instructorProfileId,
+        // Backend expects requestType and details fields for schedule requests
+        requestType: 'room_change',
+        details: requestForm.purpose || requestForm.notes || '',
+        // Include semester info based on the date
+        semester: getSemesterFromDate(date),
+        year: new Date(date).getFullYear()
       };
 
-      setRequests(prev => [newRequest, ...prev]);
-      toast.success('Request submitted successfully');
-      setShowRequestDialog(false);
-      setRequestForm({ type: '', courseId: '', details: '' });
-    } catch (error) {
-      toast.error('Failed to submit request');
+      const response = await apiService.createScheduleRequest(requestData);
+
+      if (response.success) {
+        if (response.data) {
+          // Normalize API response to the UI shape and add to list
+          setRequests(prev => [normalizeScheduleRequest(response.data), ...prev]);
+        } else {
+          // Otherwise refresh the full list and normalize
+          if (user?.id) {
+            const updatedRequests = await apiService.getInstructorScheduleRequests(user.id);
+            setRequests((updatedRequests.data || []).map(normalizeScheduleRequest));
+          }
+        }
+        
+        toast.success('Schedule request submitted successfully');
+        setShowRequestDialog(false);
+        // Reset form with all fields (default to lecture)
+        setRequestForm({
+          courseId: '',
+          roomId: '',
+          date: '',
+          startTime: '',
+          endTime: '',
+          purpose: '',
+          notes: '',
+          type: 'lecture'
+        });
+
+        // If there are conflicts, show a warning
+        if (response.data?.conflict_flag) {
+          toast.warning('Request submitted but potential conflicts detected. Admin review required.');
+        }
+      } else {
+        toast.error(response.message || 'Failed to submit request');
+      }
+    } catch (error: any) {
+      console.error('Failed to submit schedule request:', error);
+      toast.error(error.message || 'Failed to submit request');
     }
+  };
+
+  // Normalizes schedule request objects returned by the backend so the UI
+  // can rely on stable fields like `courseName`, `details`, and `type`.
+  const getSemesterFromDate = (dateStr: string): string => {
+    const date = new Date(dateStr);
+    const month = date.getMonth(); // 0-11
+    
+    // Define semester ranges (adjust these based on your academic calendar)
+    if (month >= 8 && month <= 11) return 'First Term';  // Sep-Dec
+    if (month >= 0 && month <= 3) return 'Second Term';  // Jan-Apr
+    return 'Third Term';  // May-Aug
+  };
+
+  const normalizeScheduleRequest = (r: any) => {
+    return {
+      _id: r._id || r.id || r._id,
+      courseId: r.courseId?._id || r.courseId || r.courseId,
+      courseName: r.courseId?.name || r.courseName || r.courseCode || '',
+      // UI expects `details` while backend uses `purpose` or `reason`.
+      details: r.purpose || r.details || r.reason || '',
+      // Keep a `type` field for display; fallback to requestType or a sensible default
+      type: r.type || r.requestType || 'room_change',
+      status: r.status || 'pending',
+      createdAt: r.createdAt || r.created_at || new Date().toISOString(),
+      // keep original for any further needs
+      __raw: r
+    } as ScheduleRequest;
   };
 
   const getPageTitle = () => {
@@ -331,12 +472,117 @@ export function InstructorDashboard() {
     }
   };
 
+  const toggleFavoriteRoom = (roomId: string) => {
+    setFavoriteRooms(prev => {
+      const newFavorites = prev.includes(roomId) 
+        ? prev.filter(id => id !== roomId)
+        : [...prev, roomId];
+      localStorage.setItem('favoriteRooms', JSON.stringify(newFavorites));
+      return newFavorites;
+    });
+  };
+
+  const fetchRoomSchedule = async (roomId: string, date: string) => {
+    try {
+      // Get instructor's schedules and filter for room
+      // Ensure we have a valid instructor ID before making the API call
+      const instructorId = instructorProfileId || user?._id || user?.id;
+      if (!instructorId) {
+        throw new Error('No valid instructor ID found');
+      }
+      const instRes = await apiService.getInstructorSchedules(instructorId);
+      const allSchedules = instRes?.schedules || [];
+      const weekday = date ? new Date(date).toLocaleDateString('en-US', { weekday: 'long' }) : null;
+
+      const roomSchedules = allSchedules
+        .filter((s: any) => {
+          const sid = s.roomId?._id || s.roomId || s.room || s.roomId;
+          const matchesRoom = String(sid) === String(roomId);
+          const matchesDay = weekday ? s.dayOfWeek === weekday : true;
+          return matchesRoom && matchesDay;
+        })
+        .map((s: any) => ({
+          startTime: s.startTime,
+          endTime: s.endTime,
+          courseName: s.courseName || s.courseId?.name || s.courseCode || '',
+          instructorName: s.instructorName || s.instructorId?.userId?.name || ''
+        }));
+
+      setRoomSchedule({ date, schedules: roomSchedules });
+    } catch (error) {
+      console.error('Failed to fetch room schedule:', error);
+      toast.error('Could not load room schedule');
+    }
+  };
+
+  const checkRoomAvailability = async (roomId: string, date: string, startTime: string, endTime: string) => {
+    try {
+      // Get instructor schedules and filter for room conflicts
+      const instRes = await apiService.getSchedules(); // Use getSchedules since we want to check ALL schedules
+      const allSchedules = instRes?.schedules || [];
+      const weekday = date ? new Date(date).toLocaleDateString('en-US', { weekday: 'long' }) : null;
+
+      type ApiRoomConflict = {
+        roomId?: any;
+        startTime: string;
+        endTime: string;
+        courseName?: string;
+        instructorName?: string;
+      };
+
+      const overlaps = (aStart: string, aEnd: string, bStart: string, bEnd: string) => {
+        return aStart < bEnd && bStart < aEnd; // simple overlap check assuming HH:MM strings
+      };
+
+      // Find any schedule that overlaps the requested time slot
+      const roomConflicts: ApiRoomConflict[] = allSchedules.filter((s: any) => {
+        const sid = s.roomId?._id || s.roomId || s.room || s.roomId;
+        const matchesRoom = String(sid) === String(roomId);
+        const matchesDay = weekday ? s.dayOfWeek === weekday : true;
+        if (!matchesRoom || !matchesDay) return false;
+        if (!startTime || !endTime) return true; // if times not provided, consider it a conflict
+        return overlaps(startTime, endTime, s.startTime, s.endTime);
+      }).map((s: any) => ({
+        roomId: s.roomId?._id || s.roomId,
+        startTime: s.startTime,
+        endTime: s.endTime,
+        courseName: s.courseName || s.courseCode || s.courseId?.name || '',
+        instructorName: s.instructorName || s.instructorId?.userId?.name || ''
+      }));
+
+      setRoomAvailability(prev => ({
+        ...prev,
+        [roomId]: {
+          available: roomConflicts.length === 0,
+          conflicts: roomConflicts
+        }
+      }));
+
+      // If this is the selected room, fetch its schedule for display
+      if (requestForm.roomId === roomId) {
+        await fetchRoomSchedule(roomId, date);
+      }
+    } catch (error) {
+      console.error('Failed to check room availability:', error);
+      toast.error('Could not check room availability');
+    }
+  };
+
   const filteredStudents = students.filter(student => {
     const matchesSearch = student.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          student.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          student.studentId.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesCourse = selectedCourse === 'all' || student.courses.includes(selectedCourse);
     return matchesSearch && matchesCourse;
+  });
+
+  const filteredRooms = rooms.filter(room => {
+    const meetsCapacity = room.capacity >= roomFilters.minCapacity;
+    const hasRequiredEquipment = roomFilters.equipment.length === 0 || 
+      (room.equipment && roomFilters.equipment.every(eq => room.equipment?.includes(eq)));
+    const matchesBuilding = !roomFilters.building || 
+      room.building.toLowerCase().includes(roomFilters.building.toLowerCase());
+    return meetsCapacity && hasRequiredEquipment && matchesBuilding;
   });
 
   const OverviewContent = () => {
@@ -366,7 +612,8 @@ export function InstructorDashboard() {
 
     if (!src) return 'Instructor';
     // Common name fields
-    const nameFields = [src.name, src.fullName, src.displayName, src.firstName ? `${src.firstName} ${src.lastName || ''}` : undefined];
+    // Just use the name property since that's what's defined in InstructorUser
+    const nameFields = [src.name];
     for (const f of nameFields) {
       if (f && typeof f === 'string' && f.trim()) return f.trim();
     }
@@ -535,96 +782,175 @@ export function InstructorDashboard() {
     );
   };
 
-  const ScheduleContent = () => (
-    <div className="space-y-6">
-      <Card className="border-0 shadow-sm">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Calendar className="h-5 w-5" />
-            Weekly Schedule
-          </CardTitle>
-          <CardDescription>Your complete class schedule for this semester</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-4">
-            {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map(day => {
-              const daySchedules = schedules.filter(s => s.dayOfWeek === day);
-              return (
-                <div key={day} className="border rounded-lg p-4 bg-white">
-                  <h3 className="font-semibold mb-3 text-gray-900">{day}</h3>
-                  {daySchedules.length > 0 ? (
-                    <div className="space-y-2">
-                      {daySchedules.map(schedule => (
-                        <div key={schedule._id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                          <div>
-                            <p className="font-medium text-gray-900">{schedule.courseCode} - {schedule.courseName}</p>
-                            <p className="text-sm text-gray-500">{schedule.roomName}</p>
-                          </div>
-                          <div className="text-right">
-                            <p className="text-sm font-medium text-gray-900">{schedule.startTime} - {schedule.endTime}</p>
-                            <p className="text-xs text-gray-500">{schedule.studentsEnrolled} students</p>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-gray-400 text-sm">No classes scheduled</p>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </CardContent>
-      </Card>
-    </div>
-  );
+  const ScheduleContent = () => {
+    if (loading) {
+      return (
+        <div className="flex items-center justify-center h-64">
+          <LoadingSpinner size="lg" />
+        </div>
+      );
+    }
 
-  const CoursesContent = () => (
-    <div className="space-y-6">
-      <Card className="border-0 shadow-sm">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <BookOpen className="h-5 w-5" />
-            My Courses
-          </CardTitle>
-          <CardDescription>Courses you're currently teaching</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {courses.map(course => (
-              <Card key={course._id} className="border shadow-sm">
-                <CardHeader>
-                  <div className="flex items-center justify-between mb-2">
-                    <Badge className={course.type === 'lecture' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'}>
-                      {course.type}
-                    </Badge>
-                    <span className="text-sm text-gray-500">{course.credits} credits</span>
-                  </div>
-                  <CardTitle className="text-lg">{course.code}</CardTitle>
-                  <CardDescription>{course.name}</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-sm">
-                      <span className="text-gray-500">Department:</span>
-                      <span className="font-medium">{course.department}</span>
+    // Group schedules by semester/year for organization
+    const schedulesBySemester = schedules.reduce((acc: any, schedule: any) => {
+      const key = `${schedule.semester} ${schedule.year}`;
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(schedule);
+      return acc;
+    }, {});
+
+    return (
+      <div className="space-y-6">
+        {Object.entries(schedulesBySemester).map(([term, termSchedules]: [string, any]) => (
+          <Card key={term} className="border-0 shadow-sm">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Calendar className="h-5 w-5" />
+                {term}
+              </CardTitle>
+              <CardDescription>Your weekly schedule for {term}</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map(day => {
+                  const daySchedules = termSchedules.filter((s: any) => s.dayOfWeek === day);
+                  return (
+                    <div key={day} className="border rounded-lg p-4 bg-white">
+                      <h3 className="font-semibold mb-3 text-gray-900">{day}</h3>
+                      {daySchedules.length > 0 ? (
+                        <div className="space-y-2">
+                          {daySchedules
+                            .sort((a: any, b: any) => a.startTime.localeCompare(b.startTime))
+                            .map((schedule: any) => (
+                              <div key={schedule._id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                                <div>
+                                  <p className="font-medium text-gray-900">
+                                    {schedule.courseCode} - {schedule.courseName}
+                                  </p>
+                                  <p className="text-sm text-gray-500">
+                                    {schedule.roomName}
+                                  </p>
+                                </div>
+                                <div className="text-right">
+                                  <p className="text-sm font-medium text-gray-900">
+                                    {schedule.startTime} - {schedule.endTime}
+                                  </p>
+                                  <p className="text-xs text-gray-500">
+                                    {schedule.studentsEnrolled} / {schedule.capacity} students
+                                  </p>
+                                </div>
+                              </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-gray-400 text-sm">No classes scheduled</p>
+                      )}
                     </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-gray-500">Enrolled:</span>
-                      <span className="font-medium">{course.studentsEnrolled} students</span>
-                    </div>
-                    {course.description && (
-                      <p className="text-xs text-gray-500 mt-3 pt-3 border-t">{course.description}</p>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+        
+        {!Object.keys(schedulesBySemester).length && (
+          <div className="text-center py-12">
+            <Calendar className="h-12 w-12 mx-auto text-gray-400 mb-4" />
+            <p className="text-lg text-gray-500">No schedules found</p>
+            <p className="text-sm text-gray-400">
+              You don't have any classes scheduled yet.
+            </p>
           </div>
-        </CardContent>
-      </Card>
-    </div>
-  );
+        )}
+      </div>
+    );
+  };
+
+  const CoursesContent = () => {
+    if (loading) {
+      return (
+        <div className="flex items-center justify-center h-64">
+          <LoadingSpinner size="lg" />
+        </div>
+      );
+    }
+
+    // Group courses by semester for display
+    const coursesBySemester = courses.reduce((acc: any, course: any) => {
+      const key = `${course.semester || 'Current'} ${course.year || new Date().getFullYear()}`;
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(course);
+      return acc;
+    }, {});
+
+    return (
+      <div className="space-y-6">
+        {Object.entries(coursesBySemester).map(([term, termCourses]: [string, any]) => (
+          <Card key={term} className="border-0 shadow-sm">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <BookOpen className="h-5 w-5" />
+                {term}
+              </CardTitle>
+              <CardDescription>Courses you're teaching this term</CardDescription>
+         S </CardHeader>
+     s      <CardContent>
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {termCourses.map((course: any) => (
+                  <Card key={course._id} className="border shadow-sm">
+                    <CardHeader>
+                      <div className="flex items-center justify-between mb-2">
+                        <Badge className={course.type === 'lecture' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'}>
+                          {course.type}
+                        </Badge>
+                        <span className="text-sm text-gray-500">{course.credits} credits</span>
+                      </div>
+                      <CardTitle className="text-lg">{course.code}</CardTitle>
+                      <CardDescription>{course.name}</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+      HHHd d d              <div className="space-y-2">
+                        <div className="flex justify-between text-sm">
+                          <span className="text-gray-500">Department:</span>
+                          <span className="font-medium">{course.department}</span>
+                        </div>
+                        <div className="flex justify-between text-sm">
+                          <span className="text-gray-500">Schedule:</span>
+                          <span className="font-medium">
+                            {schedules
+                              .filter(s => s.courseId === course._id)
+                              .map(s => `${s.dayOfWeek} ${s.startTime}-${s.endTime}`)
+                              .join(', ') || 'Not scheduled'}
+                          </span>
+                       </div>
+                        <div className="flex justify-between text-sm">
+                          <span className="text-gray-500">Enrolled:</span>
+                          <span className="font-medium">{course.studentsEnrolled} students</span>
+                        </div>
+                        {course.description && (
+                          <p className="text-xs text-gray-500 mt-3 pt-3 border-t">{course.description}</p>
+                        )}
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+
+        {!Object.keys(coursesBySemester).length && (
+          <div className="text-center py-12">
+            <BookOpen className="h-12 w-12 mx-auto text-gray-400 mb-4" />
+            <p className="text-lg text-gray-500">No courses found</p>
+            <p className="text<-sm >ext-gray-400">
+              Y ollu haven't been assigned to any courses yet.
+            </p>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   const StudentsContent = () => (
     <div className="space-y-6">
@@ -774,19 +1100,6 @@ export function InstructorDashboard() {
                 </DialogHeader>
                 <form onSubmit={handleSubmitRequest} className="space-y-4">
                   <div className="space-y-2">
-                    <Label htmlFor="type">Request Type</Label>
-                    <Select value={requestForm.type} onValueChange={(value) => setRequestForm(prev => ({ ...prev, type: value }))}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select request type" />
-                      </SelectTrigger>
-                      <SelectContent className="bg-white border border-gray-200 shadow-lg">
-                        <SelectItem value="room_change">Room Change</SelectItem>
-                        <SelectItem value="time_change">Time Change</SelectItem>
-                        <SelectItem value="schedule_conflict">Schedule Conflict</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
                     <Label htmlFor="courseId">Course</Label>
                     <Select value={requestForm.courseId} onValueChange={(value) => setRequestForm(prev => ({ ...prev, courseId: value }))}>
                       <SelectTrigger>
@@ -801,17 +1114,345 @@ export function InstructorDashboard() {
                       </SelectContent>
                     </Select>
                   </div>
+                  
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="minCapacity">Minimum Capacity</Label>
+                        <Input
+                          type="number"
+                          id="minCapacity"
+                          min="0"
+                          value={roomFilters.minCapacity}
+                          onChange={(e) => setRoomFilters(prev => ({
+                            ...prev,
+                            minCapacity: parseInt(e.target.value) || 0
+                          }))}
+                          placeholder="Min. seats"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="building">Building</Label>
+                        <Input
+                          type="text"
+                          id="building"
+                          value={roomFilters.building}
+                          onChange={(e) => setRoomFilters(prev => ({
+                            ...prev,
+                            building: e.target.value
+                          }))}
+                          placeholder="Search building..."
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="equipment">Required Equipment</Label>
+                      <Select
+                        value={roomFilters.equipment.join(',')}
+                        onValueChange={(value) => setRoomFilters(prev => ({
+                          ...prev,
+                          equipment: value ? value.split(',') : []
+                        }))}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select equipment" />
+                        </SelectTrigger>
+                        <SelectContent className="bg-white border border-gray-200 shadow-lg">
+                          <SelectItem value="projector">Projector</SelectItem>
+                          <SelectItem value="whiteboard">Whiteboard</SelectItem>
+                          <SelectItem value="computers">Computers</SelectItem>
+                          <SelectItem value="audio">Audio System</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="roomId">Select Room</Label>
+                      <Select value={requestForm.roomId} onValueChange={(value) => setRequestForm(prev => ({ ...prev, roomId: value }))}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select room" />
+                        </SelectTrigger>
+                        <SelectContent className="bg-white border border-gray-200 shadow-lg max-h-[300px] overflow-y-auto">
+                          {loadingRooms ? (
+                            <div className="p-4 text-center">
+                              <LoadingSpinner size="sm" />
+                              <span className="ml-2">Loading rooms...</span>
+                            </div>
+                          ) : (
+                            <>
+                              {/* Room List with Details Button */}
+                              {filteredRooms.map(room => (
+                                <div key={room._id} className="relative">
+                                  <div 
+                                    className="cursor-pointer hover:bg-gray-50 p-3 rounded-lg border-b"
+                                    onClick={() => setSelectedRoomForDetails(room._id)}
+                                  >
+                                    <div className="flex items-start justify-between">
+                                      <div className="flex-grow">
+                                        <div className="font-medium flex items-center gap-2">
+                                          {room.name} - {room.building}
+                                          {favoriteRooms.includes(room._id) && (
+                                            <span className="text-yellow-500">★</span>
+                                          )}
+                                        </div>
+                                        <div className="text-sm text-gray-500 mt-1">
+                                          <span className="inline-flex items-center gap-1">
+                                            <Users className="h-4 w-4" />
+                                            Capacity: {room.capacity}
+                                          </span>
+                                        </div>
+                                        {room.equipment && room.equipment.length > 0 && (
+                                          <div className="flex flex-wrap gap-1 mt-1">
+                                            {room.equipment.map(eq => (
+                                              <Badge key={eq} variant="outline" className="text-xs">
+                                                {eq}
+                                              </Badge>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                      <div className="text-right">
+                                        {roomAvailability[room._id] && (
+                                          <Badge className={
+                                            roomAvailability[room._id].available 
+                                              ? 'bg-green-100 text-green-800' 
+                                              : 'bg-red-100 text-red-800'
+                                          }>
+                                            {roomAvailability[room._id].available ? 'Available' : 'Conflicts'}
+                                            {roomAvailability[room._id].conflicts.length > 0 && 
+                                              ` (${roomAvailability[room._id].conflicts.length})`
+                                            }
+                                          </Badge>
+                                        )}
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            toggleFavoriteRoom(room._id);
+                                          }}
+                                          className={`ml-2 hover:scale-110 transition-transform ${
+                                            favoriteRooms.includes(room._id)
+                                              ? 'text-yellow-500'
+                                              : 'text-gray-400 hover:text-yellow-500'
+                                          }`}
+                                        >
+                                          {favoriteRooms.includes(room._id) ? '★' : '☆'}
+                                        </button>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+
+                              {/* Room Details Dialog */}
+                              {selectedRoomForDetails && (
+                                <Dialog 
+                                  open={!!selectedRoomForDetails} 
+                                  onOpenChange={() => setSelectedRoomForDetails(null)}
+                                >
+                                  <DialogContent className="max-w-2xl">
+                                    <DialogHeader>
+                                      <DialogTitle>
+                                        {rooms.find(r => r._id === selectedRoomForDetails)?.name}
+                                      </DialogTitle>
+                                      <DialogDescription>
+                                        Room details and schedule for {requestForm.date}
+                                      </DialogDescription>
+                                    </DialogHeader>
+
+                                    <div className="space-y-4">
+                                      {/* Room Info */}
+                                      <div className="grid grid-cols-2 gap-4 p-4 bg-gray-50 rounded-lg">
+                                        <div>
+                                          <h4 className="font-medium text-gray-700">Location</h4>
+                                          <p className="text-gray-600">
+                                            {rooms.find(r => r._id === selectedRoomForDetails)?.building}
+                                          </p>
+                                        </div>
+                                        <div>
+                                          <h4 className="font-medium text-gray-700">Capacity</h4>
+                                          <p className="text-gray-600">
+                                            {rooms.find(r => r._id === selectedRoomForDetails)?.capacity} seats
+                                          </p>
+                                        </div>
+                                      </div>
+
+                                      {/* Equipment List */}
+                                      <div className="p-4 bg-gray-50 rounded-lg">
+                                        <h4 className="font-medium text-gray-700 mb-2">Equipment</h4>
+                                        <div className="flex flex-wrap gap-2">
+                                          {rooms.find(r => r._id === selectedRoomForDetails)?.equipment?.map(eq => (
+                                            <Badge key={eq} className="bg-white">
+                                              {eq}
+                                            </Badge>
+                                          ))}
+                                        </div>
+                                      </div>
+
+                                      {/* Schedule Timeline */}
+                                      <div className="p-4 bg-gray-50 rounded-lg">
+                                        <h4 className="font-medium text-gray-700 mb-2">Today's Schedule</h4>
+                                        <div className="space-y-2">
+                                          {roomSchedule?.schedules.length === 0 ? (
+                                            <p className="text-gray-500">No classes scheduled for today</p>
+                                          ) : (
+                                            roomSchedule?.schedules.map((schedule, idx) => (
+                                              <div 
+                                                key={idx}
+                                                className="flex items-center justify-between p-2 bg-white rounded border"
+                                              >
+                                                <div>
+                                                  <p className="font-medium">
+                                                    {schedule.courseName || 'Booked'}
+                                                  </p>
+                                                  <p className="text-sm text-gray-500">
+                                                    {schedule.instructorName || 'Reserved'}
+                                                  </p>
+                                                </div>
+                                                <div className="text-right text-sm text-gray-600">
+                                                  {schedule.startTime} - {schedule.endTime}
+                                                </div>
+                                              </div>
+                                            ))
+                                          )}
+                                        </div>
+                                      </div>
+
+                                      {/* Conflicts Section */}
+                                      {roomAvailability[selectedRoomForDetails]?.conflicts.length > 0 && (
+                                        <div className="p-4 bg-red-50 rounded-lg">
+                                          <h4 className="font-medium text-red-700 mb-2">
+                                            Scheduling Conflicts
+                                          </h4>
+                                          <div className="space-y-2">
+                                            {roomAvailability[selectedRoomForDetails].conflicts.map((conflict, idx) => (
+                                              <div 
+                                                key={idx}
+                                                className="flex items-center justify-between p-2 bg-white rounded border border-red-100"
+                                              >
+                                                <div>
+                                                  <p className="font-medium text-red-600">
+                                                    {conflict.courseName || 'Booked Session'}
+                                                  </p>
+                                                  <p className="text-sm text-red-500">
+                                                    {conflict.instructorName || 'Reserved'}
+                                                  </p>
+                                                </div>
+                                                <div className="text-right text-sm text-red-600">
+                                                  {conflict.startTime} - {conflict.endTime}
+                                                </div>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+
+                                    <div className="flex justify-end gap-2">
+                                      <Button variant="outline" onClick={() => setSelectedRoomForDetails(null)}>
+                                        Close
+                                      </Button>
+                                      <Button 
+                                        onClick={() => {
+                                          setRequestForm(prev => ({ ...prev, roomId: selectedRoomForDetails }));
+                                          setSelectedRoomForDetails(null);
+                                        }}
+                                        disabled={!!roomAvailability[selectedRoomForDetails]?.conflicts.length}
+                                      >
+                                        Select Room
+                                      </Button>
+                                    </div>
+                                  </DialogContent>
+                                </Dialog>
+                              )}
+                              {filteredRooms.length === 0 && (
+                                <SelectItem value="" disabled>
+                                  No rooms match your criteria
+                                </SelectItem>
+                              )}
+                            </>
+                          )}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-gray-500 mt-1">
+                        {filteredRooms.length} room(s) available
+                      </p>
+                    </div>
+                  </div>
+
                   <div className="space-y-2">
-                    <Label htmlFor="details">Details</Label>
+                    <Label htmlFor="date">Date</Label>
+                    <Input
+                      type="date"
+                      id="date"
+                      value={requestForm.date}
+                      onChange={(e) => setRequestForm(prev => ({ ...prev, date: e.target.value }))}
+                      required
+                      min={new Date().toISOString().split('T')[0]}
+                    />
+                  </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="startTime">Start Time</Label>
+                        <Input
+                          type="time"
+                          id="startTime"
+                          value={requestForm.startTime}
+                          onChange={(e) => {
+                            const newStartTime = e.target.value;
+                            setRequestForm(prev => ({ ...prev, startTime: newStartTime }));
+                            if (requestForm.date && newStartTime && requestForm.endTime) {
+                              filteredRooms.forEach(room => {
+                                checkRoomAvailability(room._id, requestForm.date, newStartTime, requestForm.endTime);
+                              });
+                            }
+                          }}
+                          required
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="endTime">End Time</Label>
+                        <Input
+                          type="time"
+                          id="endTime"
+                          value={requestForm.endTime}
+                          onChange={(e) => {
+                            const newEndTime = e.target.value;
+                            setRequestForm(prev => ({ ...prev, endTime: newEndTime }));
+                            if (requestForm.date && requestForm.startTime && newEndTime) {
+                              filteredRooms.forEach(room => {
+                                checkRoomAvailability(room._id, requestForm.date, requestForm.startTime, newEndTime);
+                              });
+                            }
+                          }}
+                          required
+                        />
+                      </div>
+                    </div>                  <div className="space-y-2">
+                    <Label htmlFor="purpose">Purpose</Label>
                     <Textarea
-                      id="details"
-                      placeholder="Please provide detailed information about your request..."
-                      value={requestForm.details}
-                      onChange={(e) => setRequestForm(prev => ({ ...prev, details: e.target.value }))}
-                      rows={4}
+                      id="purpose"
+                      placeholder="Explain the purpose of your room request..."
+                      value={requestForm.purpose}
+                      onChange={(e) => setRequestForm(prev => ({ ...prev, purpose: e.target.value }))}
+                      rows={2}
                       required
                     />
                   </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="notes">Additional Notes (Optional)</Label>
+                    <Textarea
+                      id="notes"
+                      placeholder="Any additional information or special requirements..."
+                      value={requestForm.notes}
+                      onChange={(e) => setRequestForm(prev => ({ ...prev, notes: e.target.value }))}
+                      rows={2}
+                    />
+                  </div>
+
                   <div className="flex justify-end gap-2">
                     <Button type="button" variant="outline" onClick={() => setShowRequestDialog(false)}>
                       Cancel

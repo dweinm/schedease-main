@@ -26,13 +26,13 @@ import {
 } from '../ui/dialog';
 import { toast } from 'sonner';
 import { CheckCircle, XCircle, Clock } from 'lucide-react';
-import apiService, { type ScheduleRequest } from '../services/api';
+import apiService from '../services/api';
 import { Badge } from '../ui/badge';
 
 export function AdminScheduleRequests() {
-  const [requests, setRequests] = useState<ScheduleRequest[]>([]);
+  const [requests, setRequests] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedRequest, setSelectedRequest] = useState<ScheduleRequest | null>(null);
+  const [selectedRequest, setSelectedRequest] = useState<any | null>(null);
   const [showDetails, setShowDetails] = useState(false);
   const [filters, setFilters] = useState({
     status: 'pending'
@@ -114,21 +114,31 @@ export function AdminScheduleRequests() {
             <TableHeader>
               <TableRow>
                 <TableHead>Instructor</TableHead>
-                <TableHead>Course</TableHead>
-                <TableHead>Request Type</TableHead>
+                <TableHead>Room</TableHead>
+                <TableHead>Date</TableHead>
+                <TableHead>Time</TableHead>
+                <TableHead>Purpose</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead>Conflict</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {requests.map((request) => (
-                <TableRow key={request.id}>
-                  <TableCell>{request.instructorName}</TableCell>
-                  <TableCell>{request.courseName}</TableCell>
-                  <TableCell>
-                    <span className="capitalize">{request.requestType}</span>
-                  </TableCell>
+                <TableRow key={request._id || request.id}>
+                  <TableCell>{request.instructorName || request.instructorId?.userId?.name || 'Unknown'}</TableCell>
+                  <TableCell>{request.roomId?.name || request.roomName || '—'}</TableCell>
+                  <TableCell>{request.date}</TableCell>
+                  <TableCell>{request.startTime} - {request.endTime}</TableCell>
+                  <TableCell>{request.purpose || request.requestType || '—'}</TableCell>
                   <TableCell>{getStatusBadge(request.status)}</TableCell>
+                  <TableCell>
+                    {request.conflict_flag ? (
+                      <Badge className="bg-red-100 text-red-800">⚠ Conflict Detected</Badge>
+                    ) : (
+                      <Badge className="bg-green-50 text-green-800">No Conflict</Badge>
+                    )}
+                  </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2">
                       <Button
@@ -147,7 +157,7 @@ export function AdminScheduleRequests() {
                           <Button
                             size="sm"
                             variant="success"
-                            onClick={() => handleProcess(request.id, 'approve')}
+                            onClick={() => handleProcess(request._id || request.id, 'approve')}
                           >
                             <CheckCircle className="h-4 w-4 mr-1" />
                             Approve
@@ -155,7 +165,7 @@ export function AdminScheduleRequests() {
                           <Button
                             size="sm"
                             variant="destructive"
-                            onClick={() => handleProcess(request.id, 'reject')}
+                            onClick={() => handleProcess(request._id || request.id, 'reject')}
                           >
                             <XCircle className="h-4 w-4 mr-1" />
                             Reject
@@ -168,7 +178,7 @@ export function AdminScheduleRequests() {
               ))}
               {requests.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center py-4">
+                  <TableCell colSpan={8} className="text-center py-4">
                     {loading ? 'Loading...' : 'No schedule requests found'}
                   </TableCell>
                 </TableRow>

@@ -43,10 +43,18 @@ class ApiService {
     const url = `${this.baseUrl}${path}`;
 
     // Default headers
-    const defaultHeaders: Record<string, string> = {};
+    const defaultHeaders: Record<string, string> = {
+      'Content-Type': 'application/json'
+    };
     // Attach auth token if available (common keys)
     const token = localStorage.getItem('token') || localStorage.getItem('authToken') || localStorage.getItem('accessToken');
     if (token) defaultHeaders['Authorization'] = `Bearer ${token}`;
+
+    // Merge defaultHeaders with any provided headers and add to options
+    options.headers = {
+      ...defaultHeaders,
+      ...(options.headers || {})
+    };
 
     // Only set JSON content-type when we have a body
     if (options.body) defaultHeaders['Content-Type'] = 'application/json';
@@ -54,39 +62,41 @@ class ApiService {
     options.headers = { ...(options.headers as Record<string, string> || {}), ...defaultHeaders };
 
     const res = await fetch(url, options);
-    const text = await res.text().catch(() => '');
+    // First try to get the response text
+      const text = await res.text();
 
-    // debug: lightweight log (won't show token)
-    console.debug('[API]', (options.method || 'GET').toUpperCase(), url, 'status:', res.status);
+      // Debug log (won't show sensitive data)
+      console.debug('[API]', (options.method || 'GET').toUpperCase(), url, 'status:', res.status);
+      console.debug('Response text:', text);
 
-    // Try parse JSON; surface server error payloads
-    if (text) {
+      // Try to parse JSON response
+      let json;
       try {
-        const json = JSON.parse(text);
+        json = text ? JSON.parse(text) : {};
+      } catch (e) {
+        console.error('Failed to parse JSON response:', e);
+        // If response is not OK and we couldn't parse JSON, throw error with status text
         if (!res.ok) {
-          const err: any = new Error(json.message || res.statusText || 'Request failed');
-          err.response = json;
-          err.status = res.status;
-          throw err;
-        }
-        return json;
-      } catch {
-        if (!res.ok) {
-          const err: any = new Error(res.statusText || 'Request failed');
-          err.status = res.status;
-          err.body = text;
-          throw err;
+          throw new Error(`${res.statusText || 'Request failed'} (${res.status})`);
         }
         return text;
       }
-    } else {
+
+      // If we have JSON but response is not OK, format a proper error
       if (!res.ok) {
-        const err: any = new Error(res.statusText || 'Request failed');
-        err.status = res.status;
-        throw err;
+        const errorMessage = json.message || res.statusText || 'Request failed';
+        const error: any = new Error(errorMessage);
+        error.response = json;
+        error.status = res.status;
+        console.error('API Error:', {
+          status: res.status,
+          message: errorMessage,
+          response: json
+        });
+        throw error;
       }
-      return {};
-    }
+
+      return json;
   }
 
   // convenience wrapper for GET with query params (not used presently)
@@ -129,8 +139,19 @@ class ApiService {
   // --------------------
   // Schedule Request endpoints
   // --------------------
+  async createScheduleRequest(data: any) {
+    return this.makeRequest('/schedule-requests', {
+      method: 'POST',
+      body: JSON.stringify(data)
+    });
+  }
+
   async getScheduleRequests() {
     return this.makeRequest('/schedule-requests');
+  }
+
+  async getInstructorScheduleRequests(instructorId: string) {
+    return this.makeRequest(`/schedule-requests/instructor/${instructorId}`);
   }
 
   async processScheduleRequest(requestId: string, action: 'approve' | 'reject', notes?: string) {
@@ -152,10 +173,18 @@ class ApiService {
   }
 
   async createCourse(courseData: any) {
-    return this.makeRequest('/courses', {
-      method: 'POST',
-      body: JSON.stringify(courseData)
-    });
+    try {
+      console.log('Creating course with data:', courseData);
+      const response = await this.makeRequest('/courses', {
+        method: 'POST',
+        body: JSON.stringify(courseData)
+      });
+      console.log('Create course response:', response);
+      return response;
+    } catch (error) {
+      console.error('Create course error:', error);
+      throw error;
+    }
   }
 
   async updateCourse(id: string, courseData: any) {
@@ -242,6 +271,11 @@ class ApiService {
     }
   }
 
+  // Admin students endpoint
+  async getAdminStudents() {
+    return this.makeRequest('/admin/students');
+  }
+
   async getUserById(id: string) {
     return this.makeRequest(`/users/${id}`);
   }
@@ -282,11 +316,51 @@ class ApiService {
     return this.makeRequest(`/schedules/${id}`);
   }
 
+  async getInstructorSchedules(instructorId: string) {
+    return this.makeRequest(`/schedules/instructor/${instructorId}`);
+  }
+
   async createSchedule(scheduleData: any) {
-    return this.makeRequest('/schedules', {
-      method: 'POST',
-      body: JSON.stringify(scheduleData)
-    });
+    try {
+      console.log('Creating schedule with data:', scheduleData); // Debug log
+      
+      const response = await this.makeRequest('/schedules', {
+        method: 'POST',
+        body: JSON.stringify(scheduleData)
+      });
+
+      console.log('Create schedule response:', response); // Debug log
+
+      // Response is already parsed by makeRequest
+      if (!response.success) {
+        // If there are conflicts, return them for UI handling
+        if (response.conflicts) {
+          return {
+            success: false,
+            message: response.message || 'Schedule conflicts detected',
+            conflicts: response.conflicts
+          };
+        }
+        // Other error cases
+        return {
+          success: false,
+          message: response.message || 'Failed to create schedule'
+        };
+      }
+
+      // Success case
+      return {
+        success: true,
+        message: 'Schedule created successfully',
+        schedule: response.schedule
+      };
+    } catch (error: any) {
+      console.error('Create schedule error:', error);
+      return {
+        success: false,
+        message: error.message || 'Failed to create schedule'
+      };
+    }
   }
 
   async updateSchedule(id: string, scheduleData: any) {

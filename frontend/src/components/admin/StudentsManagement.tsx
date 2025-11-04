@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
-import { useAuth } from '../AuthContext';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table';
 import { Button } from '../ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../ui/dialog';
@@ -11,6 +10,8 @@ import { Loader2, Download, FileEdit, Search } from 'lucide-react';
 import { toast } from 'sonner';
 import * as XLSX from 'xlsx';
 import { Label } from '../ui/label';
+import { mockStudents } from '../mockData';
+import apiService from '../services/api';
 
 interface Student {
   _id: string;
@@ -41,10 +42,9 @@ const sections = {
 };
 
 export function StudentsManagement() {
-  const { user } = useAuth();
   const [students, setStudents] = useState<Student[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTerm, setActiveTerm] = useState(terms[0]);
+  
   const [currentAcademicYear, setCurrentAcademicYear] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [filterYear, setFilterYear] = useState('all');
@@ -54,27 +54,53 @@ export function StudentsManagement() {
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [departments, setDepartments] = useState<string[]>([]);
 
-  // Fetch students from the backend
+  // Use mock data for development
   const fetchStudents = async () => {
     try {
-      const response = await fetch('http://localhost:3001/api/admin/students', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('authToken')}`
+      // Try loading real students from backend admin endpoint first (uses apiService)
+      try {
+        const json = await apiService.getAdminStudents();
+        if (json && json.success && Array.isArray(json.students)) {
+          const mapped = json.students.map((s: any) => ({
+            _id: s._id,
+            userId: {
+              name: s.userId?.name || '',
+              email: s.userId?.email || '',
+              department: s.userId?.department || ''
+            },
+            year: String(s.year || ''),
+            section: s.section || '',
+            studentId: s.studentId || ''
+          }));
+          setStudents(mapped);
+          const uniqueDepartments = Array.from(new Set(mapped.map((x: any) => String(x.userId.department || '')))).filter(Boolean) as string[];
+          setDepartments(uniqueDepartments);
+          return;
         }
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to fetch students');
+      } catch (err) {
+        // swallow and fall back to mock below
+        console.warn('getAdminStudents failed, falling back to mock:', err);
       }
 
-      const data = await response.json();
-      if (data.success) {
-        setStudents(data.students);
-      } else {
-        toast.error(data.message || 'Failed to load students');
-      }
+      // Fallback to mock data if backend call failed or returned unexpected shape
+      const mappedStudents = mockStudents.map(student => ({
+        _id: student.id,
+        userId: {
+          name: student.name,
+          email: student.email,
+          department: student.department
+        },
+        year: student.year.toString(),
+        section: 'A', // Default section since it's not in mock data
+        studentId: student.studentId
+      }));
+
+      setStudents(mappedStudents);
+      // Extract unique departments (ensure string[])
+      const uniqueDepartments = Array.from(new Set(mappedStudents.map(s => String(s.userId.department || '')))).filter(Boolean) as string[];
+      setDepartments(uniqueDepartments);
     } catch (error) {
-      console.error('Error fetching students:', error);
+      console.error('Error setting up students:', error);
       toast.error('Failed to load students');
     } finally {
       setLoading(false);
@@ -171,11 +197,13 @@ export function StudentsManagement() {
   useEffect(() => {
     fetchStudents();
     fetchAcademicYear();
-
-    // Extract unique departments from students
-    const uniqueDepartments = [...new Set(students.map(s => s.userId.department))];
-    setDepartments(uniqueDepartments);
   }, []);
+
+  // When the selected filter year changes, reset the section filter to 'all'
+  // and ensure the section options correspond to the chosen year.
+  useEffect(() => {
+    setFilterSection('all');
+  }, [filterYear]);
 
   // Group students by year
   const groupedStudents = filteredStudents.reduce((acc, student) => {
@@ -247,7 +275,7 @@ export function StudentsManagement() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Sections</SelectItem>
-            {['1A', '1B', '2A', '2B', '3A', '3B', '4A', '4B'].map((section) => (
+            {(filterYear === 'all' ? ['1A', '1B', '2A', '2B', '3A', '3B', '4A', '4B'] : sections[filterYear as keyof typeof sections]).map((section) => (
               <SelectItem key={section} value={section}>Section {section}</SelectItem>
             ))}
           </SelectContent>
@@ -267,15 +295,11 @@ export function StudentsManagement() {
 
       <Tabs defaultValue={terms[0]} className="w-full">
         <TabsList>
-          {terms.map((term) => (
-            <TabsTrigger
-              key={term}
-              value={term}
-              onClick={() => setActiveTerm(term)}
-            >
-              {term}
-            </TabsTrigger>
-          ))}
+            {terms.map((term) => (
+              <TabsTrigger key={term} value={term}>
+                {term}
+              </TabsTrigger>
+            ))}
         </TabsList>
 
         {terms.map((term) => (

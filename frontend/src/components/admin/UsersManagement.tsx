@@ -43,6 +43,9 @@ interface UserFormData {
   password: string;
   role: string;
   department: string;
+  year?: string;
+  section?: string;
+  studentId?: string;
 }
 
 export function UsersManagement() {
@@ -60,6 +63,9 @@ export function UsersManagement() {
     password: '',
     role: '',
     department: '',
+    year: undefined,
+    section: undefined,
+    studentId: undefined,
   });
   const [submitting, setSubmitting] = useState(false);
 
@@ -98,6 +104,15 @@ export function UsersManagement() {
     e.preventDefault();
     setSubmitting(true);
     try {
+      // If creating a student, require year and section
+      if (formData.role === 'student') {
+        if (!formData.year || !formData.section) {
+          toast.error('Please select year and section for student accounts');
+          setSubmitting(false);
+          return;
+        }
+      }
+
       const response: any = await apiService.createUser(formData);
       // Backend may return created user as { user } or { data } or direct object
       const created = response?.user || response?.data || response;
@@ -196,7 +211,24 @@ export function UsersManagement() {
       password: '',
       role: '',
       department: '',
+      year: undefined,
+      section: undefined,
+      studentId: undefined,
     });
+  };
+
+  const yearNames = {
+    '1': 'First Year',
+    '2': 'Second Year',
+    '3': 'Third Year',
+    '4': 'Fourth Year'
+  };
+
+  const sectionsByYear: Record<string, string[]> = {
+    '1': ['1A', '1B'],
+    '2': ['2A', '2B'],
+    '3': ['3A', '3B'],
+    '4': ['4A', '4B']
   };
 
   const openEditDialog = (user: User) => {
@@ -364,6 +396,47 @@ export function UsersManagement() {
                         required
                       />
                     </div>
+                    {formData.role === 'student' && (
+                      <>
+                        <div className="space-y-2">
+                          <Label htmlFor="student-year">Year</Label>
+                          <Select value={formData.year} onValueChange={(value) => setFormData(prev => ({ ...prev, year: value }))}>
+                            <SelectTrigger>
+                              <SelectValue placeholder="Select Year" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {Object.entries(yearNames).map(([value, label]) => (
+                                <SelectItem key={value} value={value}>{label}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label htmlFor="student-section">Section</Label>
+                          <Select value={formData.section} onValueChange={(value) => setFormData(prev => ({ ...prev, section: value }))}>
+                            <SelectTrigger>
+                              <SelectValue placeholder="Select Section" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {(sectionsByYear[formData.year || '1'] || []).map((section) => (
+                                <SelectItem key={section} value={section}>{section}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label htmlFor="studentId">Student ID (optional)</Label>
+                          <Input
+                            id="studentId"
+                            value={formData.studentId || ''}
+                            onChange={(e) => setFormData(prev => ({ ...prev, studentId: e.target.value }))}
+                            placeholder="Optional student identifier"
+                          />
+                        </div>
+                      </>
+                    )}
                     <div className="flex justify-end gap-2 pt-2">
                       <Button type="button" variant="outline" onClick={() => setShowCreateDialog(false)}>
                         Cancel

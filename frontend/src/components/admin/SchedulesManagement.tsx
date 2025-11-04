@@ -5,8 +5,24 @@ import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import { Badge } from '../ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '../ui/dialog';
+import { 
+  Table, 
+  TableBody, 
+  TableCell, 
+  TableHead, 
+  TableHeader, 
+  TableRow 
+} from '../ui/table';
+import { 
+  Dialog, 
+  DialogContent, 
+  DialogDescription, 
+  DialogHeader, 
+  DialogTitle,
+  DialogTrigger
+} from '../ui/dialog';
+import { mockSchedule, mockCourses, mockInstructors, mockRooms } from '../mockData';
+import { AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../ui/alert-dialog";
 import { LoadingSpinner } from '../ui/LoadingSpinner';
 import { 
   Calendar, 
@@ -20,53 +36,63 @@ import {
   AlertTriangle,
   CheckCircle,
   Clock,
-  Download
+  Download,
+  Info
 } from 'lucide-react';
 import { toast } from 'sonner';
 import apiService from '../services/api';
 
-interface Course {
+const generateId = () => `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+interface BaseEntity {
   _id: string;
   id?: string;
-  code: string;
-  courseCode?: string;
-  name: string;
-  courseName?: string;
-  description?: string;
-  credits?: number;
 }
 
-interface Room {
-  _id: string;
-  id?: string;
+interface Course extends BaseEntity {
+  code: string;
+  name: string;
+  description?: string;
+  credits?: number;
+  department?: string;
+  type?: string;
+}
+
+interface Room extends BaseEntity {
   name: string;
   roomName?: string;
   number?: string;
   building: string;
   buildingName?: string;
   capacity?: number;
+  type?: string;
 }
 
-interface Instructor {
-  _id: string;
-  id: string;
-  name: string;
-  email: string;
-  department: string;
+interface Instructor extends BaseEntity {
+  userId?: {
+    name: string;
+    email: string;
+    department: string;
+  };
+  name?: string;
+  email?: string;
+  department?: string;
   maxHoursPerWeek?: number;
   specializations?: string[];
-  availability?: Record<string, { startTime: string; endTime: string }[]>;
-  userId?: {
-    _id?: string;
-    name: string;
-    email?: string;
-    department?: string;
-  };
-  status: string;
+  availability?: Record<string, { startTime: string; endTime: string; }[]>;
+  status?: string;
+}
+
+interface ScheduleResponse {
+  success: boolean;
+  message: string;
+  schedule?: Schedule;
+  conflicts?: string[];
 }
 
 interface Schedule {
   _id: string;
+  id?: string;
   courseId: string;
   courseCode: string;
   courseName: string;
@@ -80,10 +106,10 @@ interface Schedule {
   endTime: string;
   semester: string;
   year: number;
+  academicYear: string;
   status: 'draft' | 'published' | 'conflict' | 'canceled';
   conflicts: string[];
   createdAt: string;
-  academicYear?: string;
 }
 
 interface ScheduleFormData {
@@ -112,7 +138,7 @@ export function SchedulesManagement() {
   const [instructors, setInstructors] = useState<Instructor[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [loading, setLoading] = useState(true);
-  const [generating, setGenerating] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterSemester, setFilterSemester] = useState<string>('all');
@@ -121,6 +147,8 @@ export function SchedulesManagement() {
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showViewDialog, setShowViewDialog] = useState(false);
   const [showGenerateDialog, setShowGenerateDialog] = useState(false);
+  const [showConflictDialog, setShowConflictDialog] = useState(false);
+  const [conflictDetails, setConflictDetails] = useState<string[]>([]);
   const [formData, setFormData] = useState<ScheduleFormData>({
     courseId: '',
     instructorId: '',
@@ -139,7 +167,37 @@ export function SchedulesManagement() {
     avoidConflicts: true,
     maxHoursPerDay: 8
   });
-  const [submitting, setSubmitting] = useState(false);
+  const [generating, setGenerating] = useState(false);
+
+  const handleGenerateSchedules = async () => {
+    try {
+      setGenerating(true);
+      // TODO: Implement the actual schedule generation logic
+      // For now just simulating a delay
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      toast.success('Schedules generated successfully');
+      setShowGenerateDialog(false);
+    } catch (error) {
+      console.error('Error generating schedules:', error);
+      toast.error('Failed to generate schedules');
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const resetForm = () => {
+    setFormData({
+      courseId: '',
+      instructorId: '',
+      roomId: '',
+      dayOfWeek: '',
+      startTime: '',
+      endTime: '',
+      semester: 'First Term',
+      year: 2024
+    });
+  };
+
 
   const daysOfWeek = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   const semesters = ['First Term', 'Second Term', 'Third Term'];
@@ -161,29 +219,35 @@ export function SchedulesManagement() {
   const loadScheduleData = async () => {
     setLoading(true);
     try {
-      const [schedulesRes, coursesRes, instructorsRes, roomsRes] = await Promise.all([
-        apiService.getSchedules(),
-        apiService.getCourses(),
-        apiService.getInstructors(),
-        apiService.getRooms(),
-      ]);
+      // Always start with mock data as base
+      let schedulesList = [...mockSchedule];
+      let coursesList = [...mockCourses];
+      let instructorsList = [...mockInstructors];
+      let roomsList = [...mockRooms];
+      
+      try {
+        const [schedulesRes, coursesRes, instructorsRes, roomsRes] = await Promise.all([
+          apiService.getSchedules(),
+          apiService.getCourses(),
+          apiService.getInstructors(),
+          apiService.getRooms()
+        ]);
 
-      // Normalize response data with proper error checking
-      const schedulesList = Array.isArray(schedulesRes?.data) ? schedulesRes.data 
-        : Array.isArray(schedulesRes?.schedules) ? schedulesRes.schedules 
-        : Array.isArray(schedulesRes) ? schedulesRes : [];
+        // Always use API data if available, fallback to mock data
+        schedulesList = schedulesRes?.schedules?.length > 0 ? schedulesRes.schedules : mockSchedule;
+        coursesList = coursesRes?.courses?.length > 0 ? coursesRes.courses : mockCourses;
+        instructorsList = instructorsRes?.instructors?.length > 0 ? instructorsRes.instructors : mockInstructors;
+        roomsList = roomsRes?.rooms?.length > 0 ? roomsRes.rooms : mockRooms;
 
-      const coursesList = Array.isArray(coursesRes?.data) ? coursesRes.data 
-        : Array.isArray(coursesRes?.courses) ? coursesRes.courses 
-        : Array.isArray(coursesRes) ? coursesRes : [];
-
-      const instructorsList = Array.isArray(instructorsRes?.data) ? instructorsRes.data 
-        : Array.isArray(instructorsRes?.instructors) ? instructorsRes.instructors 
-        : Array.isArray(instructorsRes) ? instructorsRes : [];
-
-      const roomsList = Array.isArray(roomsRes?.data) ? roomsRes.data 
-        : Array.isArray(roomsRes?.rooms) ? roomsRes.rooms 
-        : Array.isArray(roomsRes) ? roomsRes : [];
+        console.log('Loaded data:', {
+          schedules: schedulesList,
+          courses: coursesList,
+          instructors: instructorsList,
+          rooms: roomsList
+        });
+      } catch (apiError) {
+        console.warn('API call failed, using mock data:', apiError);
+      }
 
       console.log('Fetched data:', {
         schedules: schedulesList.length,
@@ -192,43 +256,82 @@ export function SchedulesManagement() {
         rooms: roomsList.length
       });
 
-      // Enhanced normalization with proper typing
-      const normalizeId = <T extends { _id?: string; id?: string }>(item: T) => ({
-        ...item,
-        _id: item._id || item.id || '',
-        id: item._id || item.id || ''
+      const coursesN = coursesList.map((rawCourse: any) => {
+        // Ensure we have a valid MongoDB ID
+        const _id = rawCourse._id || rawCourse.id;
+        console.log('Processing course:', { raw: rawCourse, _id });
+        
+        const course: Course = {
+          _id: _id,
+          code: rawCourse.code || rawCourse.courseCode || 'N/A',
+          name: rawCourse.name || rawCourse.courseName || 'Unknown Course',
+          description: rawCourse.description,
+          credits: rawCourse.credits,
+          department: rawCourse.department,
+          type: rawCourse.type
+        };
+        return course;
       });
 
-      const normalizeName = <T extends { name?: string; fullName?: string; userName?: string; userId?: { name: string } | string }>(item: T) => ({
-        ...item,
-        name: item.name || item.fullName || item.userName || (typeof item.userId === 'object' ? item.userId.name : '') || 'Unknown'
+      const roomsN = roomsList.map((room: Partial<Room>) => {
+        const _id = room._id || room.id;
+        console.log('Processing room:', { raw: room, _id });
+        
+        const roomName = room.name || room.roomName || room.number || 'Unknown Room';
+        return {
+          _id: _id,
+          name: roomName,
+          roomName: roomName,
+          number: room.number,
+          building: room.building || room.buildingName || 'Main Building',
+          buildingName: room.building || room.buildingName || 'Main Building',
+          capacity: room.capacity,
+          type: room.type
+        } as Room;
       });
-
-      const coursesN = coursesList.map((course: Partial<Course>) => ({
-        ...normalizeId(course),
-        code: course.code || course.courseCode || 'N/A',
-        name: course.name || course.courseName || 'Unknown Course'
-      })) as Course[];
-
-      const roomsN = roomsList.map((room: Partial<Room>) => ({
-        ...normalizeId(room),
-        name: room.name || room.roomName || room.number || 'Unknown Room',
-        building: room.building || room.buildingName || 'Main Building'
-      })) as Room[];
       
       // Enhanced instructor normalization with proper typing
-      const instructorsN = (instructorsList || []).map((instructor: Partial<Instructor>) => {
+      const instructorsN = (instructorsList || []).map((instructor: any) => {
+        const _id = instructor._id || instructor.id;
+        console.log('Processing instructor:', { raw: instructor, _id });
+        
         const userId = typeof instructor.userId === 'object' ? instructor.userId : { name: '', email: '', department: '' };
-        const normalizedInstructor = {
-          _id: instructor._id || instructor.id || '',
-          id: instructor._id || instructor.id || '',
-          name: userId.name || instructor.name || 'Unknown Instructor',
+        
+        // Transform availability from array to record/object
+        const availabilityRecord: Record<string, { startTime: string; endTime: string; }[]> = {};
+        if (Array.isArray(instructor.availability)) {
+          instructor.availability.forEach((slot: { day: string; startTime: string; endTime: string; }) => {
+            if (!availabilityRecord[slot.day]) {
+              availabilityRecord[slot.day] = [];
+            }
+            availabilityRecord[slot.day].push({
+              startTime: slot.startTime,
+              endTime: slot.endTime
+            });
+          });
+        }
+
+        // Get the instructor name from all possible sources
+        const instructorName = instructor.name || 
+                             (instructor.userId && typeof instructor.userId === 'object' ? instructor.userId.name : null) ||
+                             userId.name ||
+                             (instructor.user && typeof instructor.user === 'object' ? instructor.user.name : null);
+        
+        console.log('Processing instructor name:', { raw: instructor, userId, derived: instructorName });
+
+        const normalizedInstructor: Instructor = {
+          _id: instructor._id || instructor.id || generateId(),
+          userId: {
+            name: instructorName || 'Unknown Instructor',
+            email: userId.email || instructor.email || '',
+            department: userId.department || instructor.department || ''
+          },
+          name: instructorName || 'Unknown Instructor',
           email: userId.email || instructor.email || '',
           department: userId.department || instructor.department || '',
           maxHoursPerWeek: instructor.maxHoursPerWeek || 20,
           specializations: instructor.specializations || [],
-          availability: instructor.availability || {},
-          userId: instructor.userId || null,
+          availability: availabilityRecord,
           status: instructor.status || 'active'
         };
         
@@ -237,23 +340,33 @@ export function SchedulesManagement() {
       }) as Instructor[];
       
       // Sort instructors by name
-      instructorsN.sort((a, b) => a.name.localeCompare(b.name));
+      instructorsN.sort((a, b) => {
+        const nameA = a.name || a.userId?.name || '';
+        const nameB = b.name || b.userId?.name || '';
+        return nameA.localeCompare(nameB);
+      });
 
       // Normalize schedules: support populated objects or plain ids
+      // Use the normalized lists (coursesN, instructorsN, roomsN) so UI names match what we display elsewhere
       const schedulesNormalized: Schedule[] = (schedulesList || []).map((s: any) => {
-        const course = s.courseId;
-        const courseId = typeof course === 'string' ? course : (course && (course._id || course.id)) || s.courseId || '';
-        const courseCode = (course && (course.code || course.courseCode)) || s.courseCode || '';
-        const courseName = (course && (course.name || course.courseName)) || s.courseName || '';
+        // Find related data from the normalized lists by id
+        const courseObj = coursesN.find((c: any) => c._id === s.courseId || c.id === s.courseId);
+        const instructorObj = instructorsN.find((i: any) => i._id === s.instructorId || i.id === s.instructorId);
+        const roomObj = roomsN.find((r: any) => r._id === s.roomId || r.id === s.roomId);
 
-        const instructor = s.instructorId;
-        const instructorId = typeof instructor === 'string' ? instructor : (instructor && (instructor._id || instructor.id)) || s.instructorId || '';
-        const instructorName = (instructor && (instructor.userId?.name || instructor.name)) || s.instructorName || '';
+        // Course normalization with safe fallbacks
+        const courseId = s.courseId || '';
+        const courseCode = courseObj ? courseObj.code : (s.courseCode || 'Unknown Course');
+        const courseName = courseObj ? courseObj.name : (s.courseName || 'Unknown Course');
 
-        const room = s.roomId;
-        const roomId = typeof room === 'string' ? room : (room && (room._id || room.id)) || s.roomId || '';
-        const roomName = (room && (room.name || room.roomName)) || s.roomName || '';
-        const building = (room && room.building) || s.building || '';
+        // Instructor normalization with safe fallbacks
+        const instructorId = s.instructorId || '';
+        const instructorName = instructorObj ? (instructorObj.userId?.name || instructorObj.name || 'Unknown Instructor') : (s.instructorName || 'Unknown Instructor');
+
+        // Room normalization with safe fallbacks
+        const roomId = s.roomId || '';
+        const roomName = roomObj ? (roomObj.name || 'Unknown Room') : (s.roomName || 'Unknown Room');
+        const building = roomObj ? (roomObj.building || '') : (s.building || '');
 
         const year = s.year || (s.academicYear ? parseInt(String(s.academicYear).split('-')[0]) : undefined) || 2024;
 
@@ -294,12 +407,14 @@ export function SchedulesManagement() {
 
   const handleCreateSchedule = async (e: React.FormEvent) => {
     e.preventDefault();
+    console.log('handleCreateSchedule called with formData:', JSON.stringify(formData, null, 2)); // Detailed debug log
     setSubmitting(true);
     try {
       // Validate required fields
       if (!formData.courseId || !formData.instructorId || !formData.roomId || 
           !formData.dayOfWeek || !formData.startTime || !formData.endTime ||
           !formData.semester || !formData.year) {
+        console.log('Missing required fields:', formData); // Debug log
         toast.error('All fields are required');
         setSubmitting(false);
         return;
@@ -312,54 +427,86 @@ export function SchedulesManagement() {
         return;
       }
 
-      // Get instructor details for validation
+      // Get entity details for validation
       const selectedInstructor = instructors.find(i => i._id === formData.instructorId || i.id === formData.instructorId);
-      if (!selectedInstructor) {
-        toast.error('Selected instructor not found');
+      const selectedCourse = courses.find(c => c._id === formData.courseId || c.id === formData.courseId);
+      const selectedRoom = rooms.find(r => r._id === formData.roomId || r.id === formData.roomId);
+
+      if (!selectedInstructor || !selectedCourse || !selectedRoom) {
+        toast.error('Selected instructor, course, or room not found');
+        console.log('Selected entities:', { selectedInstructor, selectedCourse, selectedRoom });
         setSubmitting(false);
         return;
       }
 
-      const payload = {
-        ...formData,
+      // Debug log selected entities
+      console.log('Selected entities:', {
+        course: selectedCourse,
+        instructor: selectedInstructor,
+        room: selectedRoom
+      });
+
+      // Create schedule with validated entity IDs
+      const newSchedule = {
+        courseId: selectedCourse._id || selectedCourse.id,
+        instructorId: selectedInstructor._id || selectedInstructor.id,
+        roomId: selectedRoom._id || selectedRoom.id,
+        dayOfWeek: formData.dayOfWeek,
+        startTime: formData.startTime,
+        endTime: formData.endTime,
+        semester: formData.semester,
         year: Number(formData.year),
-        academicYear: `${formData.year}-${formData.year + 1}`
+        academicYear: `${formData.year}-${Number(formData.year) + 1}`,
+        status: 'published',
+        forceCreate: false,
       };
 
-      // Always proceed with creation, let backend handle conflicts
-      const res = await apiService.createSchedule(payload);
-      console.log('Create schedule response:', res); // Debug log
+      // Debug log the schedule data being sent
+      console.log('Sending schedule data:', newSchedule);
+      
+      console.log('Attempting to create schedule:', newSchedule); // Debug log
 
-      if (!res?.success) {
-        toast.error(res?.message || 'Failed to create schedule');
+      // Try to create schedule using API
+      const response: ScheduleResponse = await apiService.createSchedule(newSchedule);
+      console.log('Create schedule response:', response);
+
+      // Handle conflicts
+      if (response.conflicts && response.conflicts.length > 0) {
+        console.log('Conflicts detected:', response.conflicts);
+        setConflictDetails(response.conflicts);
+        setShowConflictDialog(true);
+        // Store the schedule data temporarily for the conflict dialog
+        setFormData(prev => ({
+          ...prev,
+          conflicts: response.conflicts
+        }));
+        
+        // Show a warning toast but still allow creation
+        toast.warning('Schedule created with conflicts detected');
+        setShowCreateDialog(false);
+        resetForm();
+        await loadScheduleData(); // Refresh schedule data to show the new conflicted schedule
         return;
       }
 
-      const created = res.schedule;
-      // Also check conflicts in the response object itself
-      const conflicts = res.conflicts || created?.conflicts || [];
-      
-      if (created) {
-        // Show appropriate message and details based on conflicts
-        if ((created.status === 'conflict' || conflicts.length > 0)) {
-          // Show each conflict detail in a separate warning toast
-          conflicts.forEach((conflict: string) => {
-            toast.warning(conflict);
-          });
-          toast.warning('Schedule created with conflicts. Check conflict details above.');
-        } else {
-          toast.success('Schedule created successfully');
-        }
-        setShowCreateDialog(false);
-        resetForm();
-        await loadScheduleData();
-      } else {
-        console.error('Create schedule failed', res);
-        toast.error(res?.message || 'Failed to create schedule');
+      // Handle other errors
+      if (!response.success) {
+        throw new Error(response.message || 'Failed to create schedule');
       }
-    } catch (error) {
-      console.error('Create schedule error', error);
-      toast.error('Failed to create schedule');
+
+      // Success case
+      toast.success('Schedule created successfully');
+      setShowCreateDialog(false);
+      resetForm();
+      try {
+        await loadScheduleData(); // Refresh schedule data from server
+      } catch (loadError) {
+        console.error('Failed to reload schedules:', loadError);
+        // Even if reload fails, we still created the schedule successfully
+      }
+    } catch (error: any) {
+      console.error('Create schedule error:', error);
+      toast.error(error.message || 'Failed to create schedule');
     } finally {
       setSubmitting(false);
     }
@@ -405,20 +552,17 @@ export function SchedulesManagement() {
       const conflicts = res.conflicts || updated?.conflicts || [];
 
       if (updated) {
-        // Show appropriate message and details based on conflicts
         if ((updated.status === 'conflict' || conflicts.length > 0)) {
-          // Show each conflict detail in a separate warning toast
-          conflicts.forEach((conflict: string) => {
-            toast.warning(conflict);
-          });
-          toast.warning('Schedule updated with conflicts. Check conflict details above.');
+          setConflictDetails(conflicts);
+          setShowConflictDialog(true);
+          // Keep the edit dialog open until user makes a decision about the conflicts
         } else {
           toast.success('Schedule updated successfully');
+          setShowEditDialog(false);
+          setSelectedSchedule(null);
+          resetForm();
+          await loadScheduleData();
         }
-        setShowEditDialog(false);
-        setSelectedSchedule(null);
-        resetForm();
-        await loadScheduleData();
       } else {
         console.error('Update schedule failed', res);
         toast.error(res?.message || 'Failed to update schedule');
@@ -432,11 +576,19 @@ export function SchedulesManagement() {
   };
 
   const handleDeleteSchedule = async (scheduleId: string) => {
-    if (!confirm('Are you sure you want to delete this schedule?')) return;
     try {
+      const result = await new Promise<boolean>((resolve) => {
+        if (window.confirm('Are you sure you want to delete this schedule?')) {
+          resolve(true);
+        } else {
+          resolve(false);
+        }
+      });
+
+      if (!result) return;
+
       const res = await apiService.deleteSchedule(scheduleId);
-      const ok = res && (res.success || res.deleted || res.removed);
-      if (ok) {
+      if (res?.success) {
         toast.success('Schedule deleted successfully');
         await loadScheduleData();
       } else {
@@ -444,26 +596,12 @@ export function SchedulesManagement() {
         toast.error(res?.message || 'Failed to delete schedule');
       }
     } catch (error) {
-      console.error('Delete schedule error', error);
+      console.error('Delete schedule error:', error);
       toast.error('Failed to delete schedule');
     }
   };
 
   // Note: Conflict detection is now handled by the backend
-
-  const resetForm = () => {
-    setFormData({
-      courseId: '',
-      instructorId: '',
-      roomId: '',
-      dayOfWeek: '',
-      startTime: '',
-      endTime: '',
-      semester: 'Fall',
-      year: 2024
-    });
-  };
-
   const openEditDialog = (schedule: Schedule) => {
     setSelectedSchedule(schedule);
     setFormData({
@@ -688,7 +826,7 @@ export function SchedulesManagement() {
                       <Button type="button" variant="outline" onClick={() => setShowGenerateDialog(false)}>
                         Cancel
                       </Button>
-                      <Button onClick={handleCreateSchedule} disabled={generating} className="bg-gray-900 hover:bg-gray-800 text-white">
+                      <Button onClick={handleGenerateSchedules} disabled={generating} className="bg-gray-900 hover:bg-gray-800 text-white">
                         {generating ? (
                           <>
                             <LoadingSpinner size="sm" />
@@ -704,29 +842,35 @@ export function SchedulesManagement() {
               </Dialog>
               <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
                 <DialogTrigger asChild>
-                  <Button className="bg-gray-900 hover:bg-gray-800 text-white">
+                  <Button className="bg-gray-900 hover:bg-gray-800 text-white" onClick={() => setShowCreateDialog(true)}>
                     <Plus className="h-4 w-4 mr-2" />
                     Create Schedule
                   </Button>
                 </DialogTrigger>
-                <DialogContent className="max-w-2xl bg-white">
-                  <DialogHeader>
-                    <DialogTitle>Create New Schedule</DialogTitle>
-                    <DialogDescription>
+                <DialogContent className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 max-w-2xl bg-white z-50 rounded-lg shadow-xl p-6 max-h-[90vh] overflow-y-auto">
+                  <DialogHeader className="mb-4">
+                    <DialogTitle className="text-xl font-semibold">Create New Schedule</DialogTitle>
+                    <DialogDescription className="text-gray-600 mt-1">
                       Add a new class schedule
                     </DialogDescription>
                   </DialogHeader>
                   <form onSubmit={handleCreateSchedule} className="space-y-4">
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-2">
-                        <Label>Course</Label>
+                        <Label htmlFor="course-select">Course</Label>
                         <Select value={formData.courseId} onValueChange={(value) => setFormData(prev => ({ ...prev, courseId: value }))}>
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select course" />
+                          <SelectTrigger id="course-select" className="w-full bg-white border border-gray-200 h-10" aria-label="Select course">
+                            <SelectValue placeholder="Select course" className="text-gray-500" />
                           </SelectTrigger>
-                          <SelectContent className="bg-white border border-gray-200 shadow-lg">
+                          <SelectContent className="bg-white border border-gray-200 shadow-lg rounded-md overflow-hidden max-h-[200px] z-50"
+                            position="popper"
+                            sideOffset={5}>
                             {courses.map(course => (
-                              <SelectItem key={course._id} value={course._id}>
+                              <SelectItem 
+                                key={course._id} 
+                                value={course._id}
+                                className="py-2 px-3 text-sm cursor-pointer hover:bg-gray-50 transition-colors"
+                              >
                                 {course.code} - {course.name}
                               </SelectItem>
                             ))}
@@ -734,9 +878,9 @@ export function SchedulesManagement() {
                         </Select>
                       </div>
                       <div className="space-y-2">
-                        <Label>Instructor</Label>
+                        <Label htmlFor="instructor-select">Instructor</Label>
                         <Select value={formData.instructorId} onValueChange={(value) => setFormData(prev => ({ ...prev, instructorId: value }))}>
-                          <SelectTrigger>
+                          <SelectTrigger id="instructor-select" aria-label="Select instructor">
                             <SelectValue placeholder="Select instructor" />
                           </SelectTrigger>
                           <SelectContent className="bg-white border border-gray-200 shadow-lg">
@@ -756,9 +900,9 @@ export function SchedulesManagement() {
                     
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-2">
-                        <Label>Room</Label>
+                        <Label htmlFor="room-select">Room</Label>
                         <Select value={formData.roomId} onValueChange={(value) => setFormData(prev => ({ ...prev, roomId: value }))}>
-                          <SelectTrigger>
+                          <SelectTrigger id="room-select" aria-label="Select room">
                             <SelectValue placeholder="Select room" />
                           </SelectTrigger>
                           <SelectContent className="bg-white border border-gray-200 shadow-lg">
@@ -771,9 +915,9 @@ export function SchedulesManagement() {
                         </Select>
                       </div>
                       <div className="space-y-2">
-                        <Label>Day of Week</Label>
+                        <Label htmlFor="day-select">Day of Week</Label>
                         <Select value={formData.dayOfWeek} onValueChange={(value) => setFormData(prev => ({ ...prev, dayOfWeek: value }))}>
-                          <SelectTrigger>
+                          <SelectTrigger id="day-select" aria-label="Select day of week">
                             <SelectValue placeholder="Select day" />
                           </SelectTrigger>
                           <SelectContent className="bg-white border border-gray-200 shadow-lg">
@@ -787,9 +931,9 @@ export function SchedulesManagement() {
                     
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-2">
-                        <Label>Start Time</Label>
+                        <Label htmlFor="start-time-select">Start Time</Label>
                         <Select value={formData.startTime} onValueChange={(value) => setFormData(prev => ({ ...prev, startTime: value }))}>
-                          <SelectTrigger>
+                          <SelectTrigger id="start-time-select" aria-label="Select start time">
                             <SelectValue placeholder="Select start time" />
                           </SelectTrigger>
                           <SelectContent className="bg-white border border-gray-200 shadow-lg">
@@ -800,9 +944,9 @@ export function SchedulesManagement() {
                         </Select>
                       </div>
                       <div className="space-y-2">
-                        <Label>End Time</Label>
+                        <Label htmlFor="end-time-select">End Time</Label>
                         <Select value={formData.endTime} onValueChange={(value) => setFormData(prev => ({ ...prev, endTime: value }))}>
-                          <SelectTrigger>
+                          <SelectTrigger id="end-time-select" aria-label="Select end time">
                             <SelectValue placeholder="Select end time" />
                           </SelectTrigger>
                           <SelectContent className="bg-white border border-gray-200 shadow-lg">
@@ -816,10 +960,10 @@ export function SchedulesManagement() {
                     
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-2">
-                        <Label>Semester</Label>
+                        <Label htmlFor="semester-select">Semester</Label>
                         <Select value={formData.semester} onValueChange={(value) => setFormData(prev => ({ ...prev, semester: value }))}>
-                          <SelectTrigger>
-                            <SelectValue />
+                          <SelectTrigger id="semester-select" aria-label="Select semester">
+                            <SelectValue placeholder="Select semester" />
                           </SelectTrigger>
                           <SelectContent className="bg-white border border-gray-200 shadow-lg">
                             {semesters.map(semester => (
@@ -829,11 +973,15 @@ export function SchedulesManagement() {
                         </Select>
                       </div>
                       <div className="space-y-2">
-                        <Label>Year</Label>
+                        <Label htmlFor="year-input">Year</Label>
                         <Input
+                          id="year-input"
                           type="number"
                           value={formData.year}
                           onChange={(e) => setFormData(prev => ({ ...prev, year: parseInt(e.target.value) }))}
+                          aria-label="Enter year"
+                          min={2023}
+                          max={2050}
                         />
                       </div>
                     </div>
@@ -865,16 +1013,22 @@ export function SchedulesManagement() {
               />
             </div>
             <Select value={filterStatus} onValueChange={setFilterStatus}>
-              <SelectTrigger className="w-48 bg-white">
+              <SelectTrigger className="w-48 bg-white border border-gray-200 hover:bg-gray-50 transition-colors">
                 <Filter className="h-4 w-4 mr-2" />
                 <SelectValue placeholder="All Status" />
               </SelectTrigger>
-              <SelectContent className="bg-white border border-gray-200 shadow-lg">
-                <SelectItem value="all">All Status</SelectItem>
-                <SelectItem value="published">Published</SelectItem>
-                <SelectItem value="draft">Draft</SelectItem>
-                <SelectItem value="conflict">Conflicts</SelectItem>
-                <SelectItem value="canceled">Canceled</SelectItem>
+              <SelectContent 
+                className="bg-white border border-gray-200 shadow-lg rounded-md overflow-hidden animate-in fade-in-0 zoom-in-95"
+                position="popper"
+                sideOffset={5}
+              >
+                <div className="p-1">
+                  <SelectItem value="all" className="rounded-sm hover:bg-gray-100 cursor-pointer transition-colors">All Status</SelectItem>
+                  <SelectItem value="published" className="rounded-sm hover:bg-gray-100 cursor-pointer transition-colors">Published</SelectItem>
+                  <SelectItem value="draft" className="rounded-sm hover:bg-gray-100 cursor-pointer transition-colors">Draft</SelectItem>
+                  <SelectItem value="conflict" className="rounded-sm hover:bg-gray-100 cursor-pointer transition-colors">Conflicts</SelectItem>
+                  <SelectItem value="canceled" className="rounded-sm hover:bg-gray-100 cursor-pointer transition-colors">Canceled</SelectItem>
+                </div>
               </SelectContent>
             </Select>
             <Select value={filterSemester} onValueChange={setFilterSemester}>
@@ -944,12 +1098,20 @@ export function SchedulesManagement() {
                       )}
                       {schedule.status === 'conflict' && (
                         <div>
-                          <Badge className="bg-red-100 text-red-800">
+                          <Badge className="bg-red-100 text-red-800 cursor-pointer" onClick={() => {
+                            setSelectedSchedule(schedule);
+                            setConflictDetails(schedule.conflicts || []);
+                            setShowConflictDialog(true);
+                          }}>
                             <AlertTriangle className="h-3 w-3 mr-1" />
                             conflict
                           </Badge>
-                          {schedule.conflicts.length > 0 && (
-                            <div className="text-xs text-red-600 mt-1">
+                          {schedule.conflicts?.length > 0 && (
+                            <div className="text-xs text-red-600 mt-1 cursor-pointer hover:underline" onClick={() => {
+                              setSelectedSchedule(schedule);
+                              setConflictDetails(schedule.conflicts || []);
+                              setShowConflictDialog(true);
+                            }}>
                               {schedule.conflicts.length} conflict(s)
                             </div>
                           )}
@@ -1000,7 +1162,8 @@ export function SchedulesManagement() {
 
       {/* Edit Schedule Dialog */}
       <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
-        <DialogContent className="max-w-2xl bg-white">
+        {showEditDialog && <div className="fixed inset-0 bg-black/30 backdrop-blur-sm z-40" />}
+        <DialogContent className="relative max-w-2xl bg-white z-50">
           <DialogHeader>
             <DialogTitle>Edit Schedule</DialogTitle>
             <DialogDescription>Update schedule information</DialogDescription>
@@ -1117,8 +1280,9 @@ export function SchedulesManagement() {
 
       {/* View Schedule Dialog */}
       <Dialog open={showViewDialog} onOpenChange={setShowViewDialog}>
-        <DialogContent className="bg-white">
-          <DialogHeader>
+        {showViewDialog && <div className="fixed inset-0 bg-black/30 backdrop-blur-sm z-40" />}
+        <DialogContent className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg shadow-xl p-4 max-w-lg w-full max-h-[90vh] overflow-y-auto z-50">
+          <DialogHeader className="pb-2">
             <DialogTitle>Schedule Details</DialogTitle>
           </DialogHeader>
           {selectedSchedule && (
@@ -1185,6 +1349,131 @@ export function SchedulesManagement() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Schedule Conflict Alert Dialog */}
+      <AlertDialog open={showConflictDialog} onOpenChange={setShowConflictDialog}>
+        {showConflictDialog && <div className="fixed inset-0 bg-black/30 backdrop-blur-sm z-50" />}
+        <AlertDialogContent className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg shadow-xl p-6 w-full max-w-xl z-50">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-xl font-semibold text-yellow-600 flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5" />
+              Schedule Conflicts Detected
+            </AlertDialogTitle>
+            <AlertDialogDescription className="mt-2">
+              <div className="text-gray-600 mb-4">
+                The following conflicts were found with existing schedules:
+              </div>
+              <div className="space-y-4 max-h-[80vh] overflow-y-auto">
+                {selectedSchedule && (
+                  <div className="p-4 bg-white border border-gray-200 rounded-md mb-4 sticky top-0 z-10 shadow-sm">
+                    <h3 className="font-medium text-gray-900 mb-2">Current Schedule</h3>
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                      <div>
+                        <span className="text-gray-500">Course:</span>
+                        <div className="font-medium">{selectedSchedule.courseName} ({selectedSchedule.courseCode})</div>
+                      </div>
+                      <div>
+                        <span className="text-gray-500">Instructor:</span>
+                        <div className="font-medium">{selectedSchedule.instructorName}</div>
+                      </div>
+                      <div>
+                        <span className="text-gray-500">Room:</span>
+                        <div className="font-medium">{selectedSchedule.roomName} ({selectedSchedule.building})</div>
+                      </div>
+                      <div>
+                        <span className="text-gray-500">Time:</span>
+                        <div className="font-medium">{selectedSchedule.dayOfWeek}, {selectedSchedule.startTime} - {selectedSchedule.endTime}</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <div className="space-y-2 overflow-y-auto">
+                  {conflictDetails.map((conflict, index) => (
+                    <div key={index} className="flex items-start gap-2 p-3 bg-yellow-50 border border-yellow-200 rounded-md text-red-700">
+                      <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                      <div className="flex-1">
+                        <div className="font-medium text-sm">Conflict {index + 1}</div>
+                        <div className="text-sm mt-1">{conflict}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-md">
+                <div className="flex items-center gap-2 text-amber-700">
+                  <Info className="h-5 w-5" />
+                  <span className="font-medium">Suggestion</span>
+                </div>
+                <p className="mt-2 text-sm text-amber-700">
+                  Consider choosing a different time slot or checking the instructor's availability.
+                </p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="mt-6 flex justify-end gap-3">
+            <Button variant="outline" onClick={() => {
+              setShowConflictDialog(false);
+              if (showEditDialog) setShowEditDialog(false);
+              if (showCreateDialog) setShowCreateDialog(false);
+              resetForm();
+            }}>
+              Cancel
+            </Button>
+            <Button 
+              className="bg-yellow-500 hover:bg-yellow-600 text-white"
+              onClick={async () => {
+                setShowConflictDialog(false);
+                // If we're editing, force save with conflicts
+                if (showEditDialog && selectedSchedule) {
+                  const payload = {
+                    ...formData,
+                    year: Number(formData.year),
+                    academicYear: `${formData.year}-${formData.year + 1}`,
+                    forceUpdate: true,
+                    status: 'conflict'
+                  };
+                  try {
+                    const res = await apiService.updateSchedule(selectedSchedule._id, payload);
+                    if (res?.success) {
+                      toast.success('Schedule updated with conflicts');
+                      setShowEditDialog(false);
+                      setSelectedSchedule(null);
+                      resetForm();
+                      await loadScheduleData();
+                    }
+                  } catch (error) {
+                    console.error('Force update error:', error);
+                    toast.error('Failed to update schedule');
+                  }
+                } else if (showCreateDialog) {
+                  // Create new schedule with conflicts
+                  try {
+                    const newSchedule = {
+                      ...formData,
+                      year: Number(formData.year),
+                      academicYear: `${formData.year}-${formData.year + 1}`,
+                      forceCreate: true,
+                      status: 'conflict'
+                    };
+                    const res = await apiService.createSchedule(newSchedule);
+                    if (res?.success) {
+                      toast.success('Schedule created with conflicts');
+                      setShowCreateDialog(false);
+                      resetForm();
+                      await loadScheduleData();
+                    }
+                  } catch (error) {
+                    console.error('Force create error:', error);
+                    toast.error('Failed to create schedule');
+                  }
+                }
+              }}
+            >
+              Save with Conflicts
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

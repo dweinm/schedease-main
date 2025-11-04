@@ -1,5 +1,5 @@
 import express from 'express';
-import { Instructor, Schedule, User } from '../config/database.js';
+import { Instructor, Schedule, User, Course, Enrollment } from '../config/database.js';
 import { requireAuth, requireInstructor } from './auth.js';
 
 const router = express.Router();
@@ -64,6 +64,45 @@ router.put('/availability', async (req, res) => {
   }
 });
 
+// Get instructor's courses
+router.get('/courses', async (req, res) => {
+  try {
+    const instructor = await Instructor.findOne({ userId: req.user._id });
+    
+    if (!instructor) {
+      return res.status(404).json({
+        success: false,
+        message: 'Instructor not found'
+      });
+    }
+
+    // Find all courses assigned to this instructor
+    const courses = await Course.find({ instructorId: instructor._id })
+      .select('code name department credits type studentsEnrolled')
+      .sort({ code: 1 });
+
+    // For each course, get the number of enrolled students
+    const coursesWithEnrollments = await Promise.all(courses.map(async (course) => {
+      const enrollments = await Enrollment.countDocuments({ courseId: course._id });
+      return {
+        ...course.toObject(),
+        studentsEnrolled: enrollments
+      };
+    }));
+
+    res.json({
+      success: true,
+      data: coursesWithEnrollments
+    });
+  } catch (error) {
+    console.error('Error fetching instructor courses:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch instructor courses'
+    });
+  }
+});
+
 // Get instructor's schedules
 router.get('/schedules', async (req, res) => {
   try {
@@ -77,12 +116,27 @@ router.get('/schedules', async (req, res) => {
     }
 
     const schedules = await Schedule.find({ instructorId: instructor._id })
-      .populate('courseId', 'code name')
-      .populate('roomId', 'name building');
+      .populate('courseId', 'code name credits type')
+      .populate('roomId', 'name building')
+      .sort({ dayOfWeek: 1, startTime: 1 });
+    
+    // Transform the data for frontend
+    const transformedSchedules = schedules.map(schedule => ({
+      _id: schedule._id,
+      courseCode: schedule.courseId?.code,
+      courseName: schedule.courseId?.name,
+      roomName: schedule.roomId?.name,
+      building: schedule.roomId?.building,
+      dayOfWeek: schedule.dayOfWeek,
+      startTime: schedule.startTime,
+      endTime: schedule.endTime,
+      semester: schedule.semester,
+      year: schedule.year
+    }));
 
     res.json({
       success: true,
-      data: schedules
+      data: transformedSchedules
     });
   } catch (error) {
     console.error('Error fetching instructor schedules:', error);
@@ -156,6 +210,136 @@ router.get('/course-load', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to calculate course load'
+    });
+  }
+});
+
+// Get enrolled students for a specific course
+router.get('/course/:courseId/students', async (req, res) => {
+  try {
+    const instructor = await Instructor.findOne({ userId: req.user._id });
+    
+    if (!instructor) {
+      return res.status(404).json({
+        success: false,
+        message: 'Instructor not found'
+      });
+    }
+
+    const course = await Course.findOne({
+      _id: req.params.courseId,
+      instructorId: instructor._id
+    });
+
+    if (!course) {
+      return res.status(404).json({
+        success: false,
+        message: 'Course not found or not assigned to this instructor'
+      });
+    }
+
+    const enrollments = await Enrollment.find({ courseId: course._id })
+      .populate({
+        path: 'studentId',
+        populate: {
+          path: 'userId',
+          select: 'firstName lastName email -_id'
+        },
+        select: 'major year -_id'
+      });
+
+    const students = enrollments.map(enrollment => ({
+      studentInfo: enrollment.studentId.userId,
+      major: enrollment.studentId.major,
+      year: enrollment.studentId.year,
+      enrollmentDate: enrollment.enrollmentDate,
+      status: enrollment.status
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        course: {
+          code: course.code,
+          name: course.name,
+          type: course.type,
+          credits: course.credits
+        },
+        students
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching course students:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch enrolled students'
+    });
+  }
+});
+
+// Get all students enrolled in any of instructor's courses
+router.get('/students', async (req, res) => {
+  try {
+    const instructor = await Instructor.findOne({ userId: req.user._id });
+    
+    if (!instructor) {
+      return res.status(404).json({
+        success: false,
+        message: 'Instructor not found'
+      });
+    }
+
+    // Find all courses taught by this instructor
+    const courses = await Course.find({ instructorId: instructor._id });
+    const courseIds = courses.map(course => course._id);
+
+    // Find all enrollments for these courses
+    const enrollments = await Enrollment.find({ courseId: { $in: courseIds } })
+      .populate({
+        path: 'studentId',
+        populate: {
+          path: 'userId',
+          select: 'firstName lastName email -_id'
+        },
+        select: 'major year -_id'
+      })
+      .populate('courseId', 'code name type -_id');
+
+    // Transform the data for frontend
+    const studentsMap = new Map();
+    
+    enrollments.forEach(enrollment => {
+      const studentKey = enrollment.studentId.userId.email;
+      if (!studentsMap.has(studentKey)) {
+        studentsMap.set(studentKey, {
+          name: `${enrollment.studentId.userId.firstName} ${enrollment.studentId.userId.lastName}`,
+          email: enrollment.studentId.userId.email,
+          major: enrollment.studentId.major,
+          year: enrollment.studentId.year,
+          courses: []
+        });
+      }
+      
+      studentsMap.get(studentKey).courses.push({
+        code: enrollment.courseId.code,
+        name: enrollment.courseId.name,
+        type: enrollment.courseId.type,
+        enrollmentDate: enrollment.enrollmentDate,
+        status: enrollment.status
+      });
+    });
+
+    const students = Array.from(studentsMap.values());
+
+    res.json({
+      success: true,
+      data: students
+    });
+  } catch (error) {
+    console.error('Error fetching all enrolled students:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch enrolled students'
     });
   }
 });
