@@ -125,7 +125,7 @@ interface RoomAvailability {
 }
 
 interface RoomFilters {
-  minCapacity: number;
+  minCapacity: string;
   equipment: string[];
   building: string;
 }
@@ -153,7 +153,7 @@ export function InstructorDashboard() {
   const [selectedCourse, setSelectedCourse] = useState<string>('all');
   const [showRequestDialog, setShowRequestDialog] = useState(false);
   const [roomFilters, setRoomFilters] = useState({
-    minCapacity: 0,
+    minCapacity: '0',
     equipment: [] as string[],
     building: ''
   });
@@ -174,6 +174,28 @@ export function InstructorDashboard() {
   const [selectedCourseForDialog, setSelectedCourseForDialog] = useState<Course | null>(null);
   const [selectedCourseScheduleId, setSelectedCourseScheduleId] = useState<string | null>(null);
   const [courseScheduleStudents, setCourseScheduleStudents] = useState<Array<{ _id: string; name: string; email: string; studentId: string }>>([]);
+
+  // Fetch rooms when the New Request dialog opens
+  useEffect(() => {
+    if (!showRequestDialog) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        setLoadingRooms(true);
+        const res = await apiService.getRooms();
+        if (!cancelled) setRooms(res?.rooms || res?.data || []);
+      } catch (error) {
+        if (!cancelled) {
+          console.error('Failed to load rooms:', error);
+          toast.error('Failed to load rooms');
+          setRooms([]);
+        }
+      } finally {
+        if (!cancelled) setLoadingRooms(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [showRequestDialog]);
   const [roomSchedule, setRoomSchedule] = useState<{
     date: string;
     schedules: Array<{
@@ -186,6 +208,7 @@ export function InstructorDashboard() {
   interface RequestFormData {
     courseId: string;
     roomId: string;
+    scheduleId?: string;
     date: string;
     startTime: string;
     endTime: string;
@@ -197,6 +220,7 @@ export function InstructorDashboard() {
   const [requestForm, setRequestForm] = useState<RequestFormData>({
     courseId: '',
     roomId: '',
+    scheduleId: '',
     date: '',
     startTime: '',
     endTime: '',
@@ -487,6 +511,7 @@ export function InstructorDashboard() {
         setRequestForm({
           courseId: '',
           roomId: '',
+          scheduleId: '',
           date: '',
           startTime: '',
           endTime: '',
@@ -678,7 +703,8 @@ export function InstructorDashboard() {
   });
 
   const filteredRooms = rooms.filter(room => {
-    const meetsCapacity = room.capacity >= roomFilters.minCapacity;
+    const minCap = Number(roomFilters.minCapacity || '0') || 0;
+    const meetsCapacity = room.capacity >= minCap;
     const hasRequiredEquipment = roomFilters.equipment.length === 0 || 
       (room.equipment && roomFilters.equipment.every(eq => room.equipment?.includes(eq)));
     const matchesBuilding = !roomFilters.building || 
@@ -1295,17 +1321,17 @@ export function InstructorDashboard() {
                   New Request
                 </Button>
               </DialogTrigger>
-              <DialogContent className="bg-white">
+              <DialogContent className="bg-white max-w-5xl w-[95vw] max-h-[90vh] overflow-hidden">
                 <DialogHeader>
                   <DialogTitle>Submit Schedule Request</DialogTitle>
                   <DialogDescription>
                     Request a change to your schedule or report a conflict
                   </DialogDescription>
                 </DialogHeader>
-                <form onSubmit={handleSubmitRequest} className="space-y-4">
+                <form onSubmit={handleSubmitRequest} className="space-y-4 md:grid md:grid-cols-2 md:gap-6 md:space-y-0 max-h-[75vh] overflow-auto pr-2">
                   <div className="space-y-2">
                     <Label htmlFor="courseId">Course</Label>
-                    <Select value={requestForm.courseId} onValueChange={(value) => setRequestForm(prev => ({ ...prev, courseId: value }))}>
+                    <Select value={requestForm.courseId} onValueChange={(value) => setRequestForm(prev => ({ ...prev, courseId: value, scheduleId: '' }))}>
                       <SelectTrigger>
                         <SelectValue placeholder="Select course" />
                       </SelectTrigger>
@@ -1318,270 +1344,114 @@ export function InstructorDashboard() {
                       </SelectContent>
                     </Select>
                   </div>
-                  
-                  <div className="space-y-4">
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="minCapacity">Minimum Capacity</Label>
-                        <Input
-                          type="number"
-                          id="minCapacity"
-                          min="0"
-                          value={roomFilters.minCapacity}
-                          onChange={(e) => setRoomFilters(prev => ({
-                            ...prev,
-                            minCapacity: parseInt(e.target.value) || 0
-                          }))}
-                          placeholder="Min. seats"
-                        />
+
+                  <div className="space-y-2">
+                    <Label htmlFor="scheduleId">Schedule</Label>
+                    <Select 
+                      value={requestForm.scheduleId || ''}
+                      onValueChange={(value) => setRequestForm(prev => ({ ...prev, scheduleId: value }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select schedule (optional)" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-white border border-gray-200 shadow-lg">
+                        {schedules
+                          .filter(s => !requestForm.courseId || String(s.courseId) === String(requestForm.courseId))
+                          .map(s => (
+                            <SelectItem key={s._id} value={s._id}>
+                              {s.dayOfWeek} {s.startTime}-{s.endTime} • {s.roomName}
+                            </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-gray-500">Only your schedules are listed.</p>
+                  </div>
+
+                  <div className="md:col-span-2">
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="minCapacity">Minimum Capacity</Label>
+                          <Input
+                            type="text"
+                            inputMode="numeric"
+                            id="minCapacity"
+                            value={roomFilters.minCapacity}
+                            onChange={(e) => {
+                              const raw = e.target.value;
+                              const digits = raw.replace(/[^0-9]/g, '');
+                              setRoomFilters(prev => ({
+                                ...prev,
+                                minCapacity: digits
+                              }));
+                            }}
+                            placeholder="Min. seats"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="building">Building</Label>
+                          <Input
+                            type="text"
+                            id="building"
+                            value={roomFilters.building}
+                            onChange={(e) => setRoomFilters(prev => ({
+                              ...prev,
+                              building: e.target.value
+                            }))}
+                            placeholder="Search building..."
+                          />
+                        </div>
                       </div>
+
                       <div className="space-y-2">
-                        <Label htmlFor="building">Building</Label>
-                        <Input
-                          type="text"
-                          id="building"
-                          value={roomFilters.building}
-                          onChange={(e) => setRoomFilters(prev => ({
+                        <Label htmlFor="equipment">Required Equipment</Label>
+                        <Select
+                          value={roomFilters.equipment.join(',')}
+                          onValueChange={(value) => setRoomFilters(prev => ({
                             ...prev,
-                            building: e.target.value
-                          }))}
-                          placeholder="Search building..."
-                        />
+                            equipment: value ? value.split(',') : []
+                          }))}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select equipment" />
+                          </SelectTrigger>
+                          <SelectContent className="bg-white border border-gray-200 shadow-lg">
+                            <SelectItem value="projector">Projector</SelectItem>
+                            <SelectItem value="whiteboard">Whiteboard</SelectItem>
+                            <SelectItem value="computers">Computers</SelectItem>
+                            <SelectItem value="audio">Audio System</SelectItem>
+                          </SelectContent>
+                        </Select>
                       </div>
-                    </div>
 
-                    <div className="space-y-2">
-                      <Label htmlFor="equipment">Required Equipment</Label>
-                      <Select
-                        value={roomFilters.equipment.join(',')}
-                        onValueChange={(value) => setRoomFilters(prev => ({
-                          ...prev,
-                          equipment: value ? value.split(',') : []
-                        }))}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select equipment" />
-                        </SelectTrigger>
-                        <SelectContent className="bg-white border border-gray-200 shadow-lg">
-                          <SelectItem value="projector">Projector</SelectItem>
-                          <SelectItem value="whiteboard">Whiteboard</SelectItem>
-                          <SelectItem value="computers">Computers</SelectItem>
-                          <SelectItem value="audio">Audio System</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="roomId">Select Room</Label>
-                      <Select value={requestForm.roomId} onValueChange={(value) => setRequestForm(prev => ({ ...prev, roomId: value }))}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select room" />
-                        </SelectTrigger>
-                        <SelectContent className="bg-white border border-gray-200 shadow-lg max-h-[300px] overflow-y-auto">
-                          {loadingRooms ? (
-                            <div className="p-4 text-center">
-                              <LoadingSpinner size="sm" />
-                              <span className="ml-2">Loading rooms...</span>
-                            </div>
-                          ) : (
-                            <>
-                              {/* Room List with Details Button */}
-                              {filteredRooms.map(room => (
-                                <div key={room._id} className="relative">
-                                  <div 
-                                    className="cursor-pointer hover:bg-gray-50 p-3 rounded-lg border-b"
-                                    onClick={() => setSelectedRoomForDetails(room._id)}
-                                  >
-                                    <div className="flex items-start justify-between">
-                                      <div className="flex-grow">
-                                        <div className="font-medium flex items-center gap-2">
-                                          {room.name} - {room.building}
-                                          {favoriteRooms.includes(room._id) && (
-                                            <span className="text-yellow-500">★</span>
-                                          )}
-                                        </div>
-                                        <div className="text-sm text-gray-500 mt-1">
-                                          <span className="inline-flex items-center gap-1">
-                                            <Users className="h-4 w-4" />
-                                            Capacity: {room.capacity}
-                                          </span>
-                                        </div>
-                                        {room.equipment && room.equipment.length > 0 && (
-                                          <div className="flex flex-wrap gap-1 mt-1">
-                                            {room.equipment.map(eq => (
-                                              <Badge key={eq} variant="outline" className="text-xs">
-                                                {eq}
-                                              </Badge>
-                                            ))}
-                                          </div>
-                                        )}
-                                      </div>
-                                      <div className="text-right">
-                                        {roomAvailability[room._id] && (
-                                          <Badge className={
-                                            roomAvailability[room._id].available 
-                                              ? 'bg-green-100 text-green-800' 
-                                              : 'bg-red-100 text-red-800'
-                                          }>
-                                            {roomAvailability[room._id].available ? 'Available' : 'Conflicts'}
-                                            {roomAvailability[room._id].conflicts.length > 0 && 
-                                              ` (${roomAvailability[room._id].conflicts.length})`
-                                            }
-                                          </Badge>
-                                        )}
-                                        <button
-                                          type="button"
-                                          onClick={(e) => {
-                                            e.preventDefault();
-                                            e.stopPropagation();
-                                            toggleFavoriteRoom(room._id);
-                                          }}
-                                          className={`ml-2 hover:scale-110 transition-transform ${
-                                            favoriteRooms.includes(room._id)
-                                              ? 'text-yellow-500'
-                                              : 'text-gray-400 hover:text-yellow-500'
-                                          }`}
-                                        >
-                                          {favoriteRooms.includes(room._id) ? '★' : '☆'}
-                                        </button>
-                                      </div>
-                                    </div>
-                                  </div>
-                                </div>
-                              ))}
-
-                              {/* Room Details Dialog */}
-                              {selectedRoomForDetails && (
-                                <Dialog 
-                                  open={!!selectedRoomForDetails} 
-                                  onOpenChange={() => setSelectedRoomForDetails(null)}
-                                >
-                                  <DialogContent className="max-w-2xl">
-                                    <DialogHeader>
-                                      <DialogTitle>
-                                        {rooms.find(r => r._id === selectedRoomForDetails)?.name}
-                                      </DialogTitle>
-                                      <DialogDescription>
-                                        Room details and schedule for {requestForm.date}
-                                      </DialogDescription>
-                                    </DialogHeader>
-
-                                    <div className="space-y-4">
-                                      {/* Room Info */}
-                                      <div className="grid grid-cols-2 gap-4 p-4 bg-gray-50 rounded-lg">
-                                        <div>
-                                          <h4 className="font-medium text-gray-700">Location</h4>
-                                          <p className="text-gray-600">
-                                            {rooms.find(r => r._id === selectedRoomForDetails)?.building}
-                                          </p>
-                                        </div>
-                                        <div>
-                                          <h4 className="font-medium text-gray-700">Capacity</h4>
-                                          <p className="text-gray-600">
-                                            {rooms.find(r => r._id === selectedRoomForDetails)?.capacity} seats
-                                          </p>
-                                        </div>
-                                      </div>
-
-                                      {/* Equipment List */}
-                                      <div className="p-4 bg-gray-50 rounded-lg">
-                                        <h4 className="font-medium text-gray-700 mb-2">Equipment</h4>
-                                        <div className="flex flex-wrap gap-2">
-                                          {rooms.find(r => r._id === selectedRoomForDetails)?.equipment?.map(eq => (
-                                            <Badge key={eq} className="bg-white">
-                                              {eq}
-                                            </Badge>
-                                          ))}
-                                        </div>
-                                      </div>
-
-                                      {/* Schedule Timeline */}
-                                      <div className="p-4 bg-gray-50 rounded-lg">
-                                        <h4 className="font-medium text-gray-700 mb-2">Today's Schedule</h4>
-                                        <div className="space-y-2">
-                                          {roomSchedule?.schedules.length === 0 ? (
-                                            <p className="text-gray-500">No classes scheduled for today</p>
-                                          ) : (
-                                            roomSchedule?.schedules.map((schedule, idx) => (
-                                              <div 
-                                                key={idx}
-                                                className="flex items-center justify-between p-2 bg-white rounded border"
-                                              >
-                                                <div>
-                                                  <p className="font-medium">
-                                                    {schedule.courseName || 'Booked'}
-                                                  </p>
-                                                  <p className="text-sm text-gray-500">
-                                                    {schedule.instructorName || 'Reserved'}
-                                                  </p>
-                                                </div>
-                                                <div className="text-right text-sm text-gray-600">
-                                                  {schedule.startTime} - {schedule.endTime}
-                                                </div>
-                                              </div>
-                                            ))
-                                          )}
-                                        </div>
-                                      </div>
-
-                                      {/* Conflicts Section */}
-                                      {roomAvailability[selectedRoomForDetails]?.conflicts.length > 0 && (
-                                        <div className="p-4 bg-red-50 rounded-lg">
-                                          <h4 className="font-medium text-red-700 mb-2">
-                                            Scheduling Conflicts
-                                          </h4>
-                                          <div className="space-y-2">
-                                            {roomAvailability[selectedRoomForDetails].conflicts.map((conflict, idx) => (
-                                              <div 
-                                                key={idx}
-                                                className="flex items-center justify-between p-2 bg-white rounded border border-red-100"
-                                              >
-                                                <div>
-                                                  <p className="font-medium text-red-600">
-                                                    {conflict.courseName || 'Booked Session'}
-                                                  </p>
-                                                  <p className="text-sm text-red-500">
-                                                    {conflict.instructorName || 'Reserved'}
-                                                  </p>
-                                                </div>
-                                                <div className="text-right text-sm text-red-600">
-                                                  {conflict.startTime} - {conflict.endTime}
-                                                </div>
-                                              </div>
-                                            ))}
-                                          </div>
-                                        </div>
-                                      )}
-                                    </div>
-
-                                    <div className="flex justify-end gap-2">
-                                      <Button variant="outline" onClick={() => setSelectedRoomForDetails(null)}>
-                                        Close
-                                      </Button>
-                                      <Button 
-                                        onClick={() => {
-                                          setRequestForm(prev => ({ ...prev, roomId: selectedRoomForDetails }));
-                                          setSelectedRoomForDetails(null);
-                                        }}
-                                        disabled={!!roomAvailability[selectedRoomForDetails]?.conflicts.length}
-                                      >
-                                        Select Room
-                                      </Button>
-                                    </div>
-                                  </DialogContent>
-                                </Dialog>
-                              )}
-                              {filteredRooms.length === 0 && (
-                                <SelectItem value="" disabled>
-                                  No rooms match your criteria
-                                </SelectItem>
-                              )}
-                            </>
-                          )}
-                        </SelectContent>
-                      </Select>
-                      <p className="text-xs text-gray-500 mt-1">
-                        {filteredRooms.length} room(s) available
-                      </p>
+                      <div className="space-y-2">
+                        <Label htmlFor="roomId">Select Room</Label>
+                        <Select value={requestForm.roomId} onValueChange={(value) => setRequestForm(prev => ({ ...prev, roomId: value }))}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select room" />
+                          </SelectTrigger>
+                          <SelectContent className="bg-white border border-gray-200 shadow-lg max-h-[300px] overflow-y-auto">
+                            {loadingRooms ? (
+                              <div className="p-4 text-center">
+                                <LoadingSpinner size="sm" />
+                                <span className="ml-2">Loading rooms...</span>
+                              </div>
+                            ) : filteredRooms.length > 0 ? (
+                              <>
+                                {filteredRooms.map(room => (
+                                  <SelectItem key={room._id} value={room._id}>
+                                    {room.name} • {room.building} (Capacity: {room.capacity})
+                                  </SelectItem>
+                                ))}
+                              </>
+                            ) : (
+                              <SelectItem value="none" disabled>
+                                No rooms available
+                              </SelectItem>
+                            )}
+                          </SelectContent>
+                        </Select>
+                        <p className="text-xs text-gray-500">Filtered by your criteria above.</p>
+                      </div>
                     </div>
                   </div>
 
@@ -1596,45 +1466,44 @@ export function InstructorDashboard() {
                       min={new Date().toISOString().split('T')[0]}
                     />
                   </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="startTime">Start Time</Label>
+                    <Input
+                      type="time"
+                      id="startTime"
+                      value={requestForm.startTime}
+                      onChange={(e) => {
+                        const newStartTime = e.target.value;
+                        setRequestForm(prev => ({ ...prev, startTime: newStartTime }));
+                        if (requestForm.date && newStartTime && requestForm.endTime) {
+                          filteredRooms.forEach(room => {
+                            checkRoomAvailability(room._id, requestForm.date, newStartTime, requestForm.endTime);
+                          });
+                        }
+                      }}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="endTime">End Time</Label>
+                    <Input
+                      type="time"
+                      id="endTime"
+                      value={requestForm.endTime}
+                      onChange={(e) => {
+                        const newEndTime = e.target.value;
+                        setRequestForm(prev => ({ ...prev, endTime: newEndTime }));
+                        if (requestForm.date && requestForm.startTime && newEndTime) {
+                          filteredRooms.forEach(room => {
+                            checkRoomAvailability(room._id, requestForm.date, requestForm.startTime, newEndTime);
+                          });
+                        }
+                      }}
+                      required
+                    />
+                  </div>
 
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="startTime">Start Time</Label>
-                        <Input
-                          type="time"
-                          id="startTime"
-                          value={requestForm.startTime}
-                          onChange={(e) => {
-                            const newStartTime = e.target.value;
-                            setRequestForm(prev => ({ ...prev, startTime: newStartTime }));
-                            if (requestForm.date && newStartTime && requestForm.endTime) {
-                              filteredRooms.forEach(room => {
-                                checkRoomAvailability(room._id, requestForm.date, newStartTime, requestForm.endTime);
-                              });
-                            }
-                          }}
-                          required
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="endTime">End Time</Label>
-                        <Input
-                          type="time"
-                          id="endTime"
-                          value={requestForm.endTime}
-                          onChange={(e) => {
-                            const newEndTime = e.target.value;
-                            setRequestForm(prev => ({ ...prev, endTime: newEndTime }));
-                            if (requestForm.date && requestForm.startTime && newEndTime) {
-                              filteredRooms.forEach(room => {
-                                checkRoomAvailability(room._id, requestForm.date, requestForm.startTime, newEndTime);
-                              });
-                            }
-                          }}
-                          required
-                        />
-                      </div>
-                    </div>                  <div className="space-y-2">
+                  <div className="space-y-2 md:col-span-2">
                     <Label htmlFor="purpose">Purpose</Label>
                     <Textarea
                       id="purpose"
@@ -1646,7 +1515,7 @@ export function InstructorDashboard() {
                     />
                   </div>
 
-                  <div className="space-y-2">
+                  <div className="space-y-2 md:col-span-2">
                     <Label htmlFor="notes">Additional Notes (Optional)</Label>
                     <Textarea
                       id="notes"
@@ -1657,7 +1526,7 @@ export function InstructorDashboard() {
                     />
                   </div>
 
-                  <div className="flex justify-end gap-2">
+                  <div className="flex justify-end gap-2 md:col-span-2">
                     <Button type="button" variant="outline" onClick={() => setShowRequestDialog(false)}>
                       Cancel
                     </Button>

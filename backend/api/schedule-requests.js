@@ -1,4 +1,4 @@
-import { ScheduleRequest, Instructor, Course, Room } from '../config/database.js';
+import { ScheduleRequest, Instructor, Course, Room, Schedule } from '../config/database.js';
 import { verifyToken } from '../utils/auth.js';
 import mongoose from 'mongoose';
 
@@ -43,8 +43,8 @@ export async function getInstructorScheduleRequests(req, res) {
 // Create a new schedule request
 export async function createScheduleRequest(req, res) {
   try {
-    // Expected body: { instructorId?, roomId, date, startTime, endTime, purpose, notes }
-    const { instructorId: bodyInstructorId, roomId, date, startTime, endTime, purpose, notes } = req.body;
+    // Expected body: { instructorId?, roomId, courseId?, scheduleId?, date or dayOfWeek, startTime, endTime, purpose, notes, semester?, year? }
+    const { instructorId: bodyInstructorId, roomId, courseId, scheduleId, date, dayOfWeek: bodyDayOfWeek, startTime, endTime, purpose, notes, semester, year } = req.body;
 
     // If instructor not provided in body, try req.user (set by requireAuth)
     const instructorId = bodyInstructorId || (req.user && req.user.id);
@@ -58,8 +58,8 @@ export async function createScheduleRequest(req, res) {
       return res.status(404).json({ success: false, message: 'Instructor not found' });
     }
 
-    if (!roomId || !date || !startTime || !endTime || !purpose) {
-      return res.status(400).json({ success: false, message: 'roomId, date, startTime, endTime and purpose are required' });
+    if (!roomId || (!date && !bodyDayOfWeek) || !startTime || !endTime || !purpose) {
+      return res.status(400).json({ success: false, message: 'roomId, date or dayOfWeek, startTime, endTime and purpose are required' });
     }
 
     // Verify room exists
@@ -68,42 +68,72 @@ export async function createScheduleRequest(req, res) {
       return res.status(404).json({ success: false, message: 'Room not found' });
     }
 
-    // Conflict detection: find any APPROVED requests for same room and date that overlap
-    // Overlap logic: requested_start < existing_end && requested_end > existing_start
-    const existingApproved = await ScheduleRequest.find({
-      roomId: roomId,
-      date: date,
-      status: 'approved'
-    });
+    // Determine dayOfWeek
+    const dayOfWeek = bodyDayOfWeek || (date ? new Date(date).toLocaleDateString('en-US', { weekday: 'long' }) : undefined);
 
-    let conflict_flag = false;
-    for (const ex of existingApproved) {
-      const exStart = ex.startTime;
-      const exEnd = ex.endTime;
-      if (startTime < exEnd && endTime > exStart) {
-        conflict_flag = true;
-        break;
+    // Conflict detection against existing Schedules for same room and dayOfWeek
+    const overlappingSchedules = await Schedule.find({
+      roomId: roomId,
+      dayOfWeek: dayOfWeek,
+      ...(semester ? { semester } : {}),
+      ...(year ? { year } : {}),
+    })
+    .select('courseId dayOfWeek startTime endTime')
+    .populate('courseId', 'code name');
+
+    const conflicts = [];
+    for (const s of overlappingSchedules) {
+      if (startTime < s.endTime && endTime > s.startTime) {
+        const code = s.courseId?.code || 'Unknown';
+        const name = s.courseId?.name || '';
+        conflicts.push(`Room conflict with ${code} ${name} (${s.dayOfWeek} ${s.startTime}-${s.endTime})`);
       }
     }
+    const conflict_flag = conflicts.length > 0;
 
     // Save new request
     const request = new ScheduleRequest({
       instructorId,
+      courseId: courseId || undefined,
+      scheduleId: scheduleId || undefined,
       roomId,
-      date,
+      date: date || undefined,
+      dayOfWeek,
       startTime,
       endTime,
+      semester: semester || undefined,
+      year: year || undefined,
       purpose,
       notes,
+      requestType: (req.body && req.body.requestType) || 'room_change',
+      details: (req.body && (req.body.details || req.body.purpose || req.body.notes)) || purpose || notes || 'Schedule change request',
       status: 'pending',
-      conflict_flag
+      conflict_flag,
+      conflicts
     });
 
     await request.save();
 
+    // Denormalize display fields
+    try {
+      const [instr, course, r] = await Promise.all([
+        Instructor.findById(instructorId).populate('userId'),
+        courseId ? Course.findById(courseId) : null,
+        Room.findById(roomId)
+      ]);
+      if (instr?.userId?.name) request.instructorName = instr.userId.name;
+      if (course) {
+        request.courseName = course.name;
+        request.courseCode = course.code;
+      }
+      if (r) request.roomName = r.name;
+      await request.save();
+    } catch {}
+
     const populated = await ScheduleRequest.findById(request._id)
       .populate({ path: 'instructorId', populate: { path: 'userId', select: 'name email' } })
-      .populate('roomId', 'name building');
+      .populate('roomId', 'name building')
+      .populate('courseId', 'code name');
 
     res.status(201).json({ success: true, data: populated });
   } catch (error) {

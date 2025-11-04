@@ -354,6 +354,14 @@ const scheduleRequestSchema = new mongoose.Schema({
     ref: 'Instructor',
     required: true
   },
+  courseId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Course'
+  },
+  scheduleId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Schedule'
+  },
   requestType: {
     type: String,
     enum: ['room_change', 'time_change', 'schedule_conflict'],
@@ -372,11 +380,20 @@ const scheduleRequestSchema = new mongoose.Schema({
   date: {
     type: String
   },
+  dayOfWeek: {
+    type: String
+  },
   startTime: {
     type: String
   },
   endTime: {
     type: String
+  },
+  semester: {
+    type: String
+  },
+  year: {
+    type: Number
   },
   purpose: {
     type: String,
@@ -391,6 +408,12 @@ const scheduleRequestSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  conflicts: [{ type: String }],
+  // denormalized display fields
+  instructorName: { type: String },
+  courseName: { type: String },
+  courseCode: { type: String },
+  roomName: { type: String },
   details: {
     type: String,
     required: true,

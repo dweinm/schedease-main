@@ -128,9 +128,9 @@ export function AdminScheduleRequests() {
                 <TableRow key={request._id || request.id}>
                   <TableCell>{request.instructorName || request.instructorId?.userId?.name || 'Unknown'}</TableCell>
                   <TableCell>{request.roomId?.name || request.roomName || '—'}</TableCell>
-                  <TableCell>{request.date}</TableCell>
+                  <TableCell>{request.date || request.dayOfWeek || '—'}</TableCell>
                   <TableCell>{request.startTime} - {request.endTime}</TableCell>
-                  <TableCell>{request.purpose || request.requestType || '—'}</TableCell>
+                  <TableCell>{request.purpose || request.details || request.requestType || '—'}</TableCell>
                   <TableCell>{getStatusBadge(request.status)}</TableCell>
                   <TableCell>
                     {request.conflict_flag ? (
@@ -202,29 +202,38 @@ export function AdminScheduleRequests() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <h4 className="font-medium">Instructor</h4>
-                  <p className="text-sm text-gray-500">{selectedRequest.instructorName}</p>
+                  <p className="text-sm text-gray-500">{selectedRequest.instructorName || selectedRequest.instructorId?.userId?.name || 'Unknown'}</p>
                 </div>
                 <div>
                   <h4 className="font-medium">Course</h4>
-                  <p className="text-sm text-gray-500">{selectedRequest.courseName}</p>
+                  <p className="text-sm text-gray-500">{selectedRequest.courseName || selectedRequest.courseId?.name || '—'}</p>
                 </div>
                 <div>
                   <h4 className="font-medium">Current Schedule</h4>
-                  <p className="text-sm text-gray-500">
-                    {formatSchedule(selectedRequest.currentSchedule)}
-                  </p>
+                  <p className="text-sm text-gray-500">—</p>
                 </div>
                 <div>
                   <h4 className="font-medium">Requested Schedule</h4>
                   <p className="text-sm text-gray-500">
-                    {formatSchedule(selectedRequest.requestedSchedule)}
+                    {formatSchedule({ dayOfWeek: selectedRequest.dayOfWeek || '—', startTime: selectedRequest.startTime, endTime: selectedRequest.endTime })}
                   </p>
                 </div>
                 <div className="col-span-2">
                   <h4 className="font-medium">Reason</h4>
-                  <p className="text-sm text-gray-500">{selectedRequest.reason}</p>
+                  <p className="text-sm text-gray-500">{selectedRequest.purpose || selectedRequest.details || '—'}</p>
                 </div>
               </div>
+
+              {Array.isArray(selectedRequest.conflicts) && selectedRequest.conflicts.length > 0 && (
+                <div className="space-y-2">
+                  <h4 className="font-medium text-red-700">Conflicts Detected</h4>
+                  <ul className="list-disc pl-5 text-sm text-red-700">
+                    {selectedRequest.conflicts.map((c: string, idx: number) => (
+                      <li key={idx}>{c}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
               {selectedRequest.status === 'pending' && (
                 <DialogFooter className="flex justify-end gap-2 mt-6">
