@@ -129,6 +129,14 @@ class ApiService {
     return this.makeRequest('/enrollments');
   }
 
+  async getInstructorEnrollments(instructorId: string) {
+    return this.makeRequest(`/enrollments/instructor/${instructorId}`);
+  }
+
+  async getScheduleEnrollments(scheduleId: string) {
+    return this.makeRequest(`/enrollments/schedule/${scheduleId}`);
+  }
+
   async processEnrollment(enrollmentId: string, action: 'approve' | 'reject', notes?: string) {
     return this.makeRequest(`/enrollments/${enrollmentId}/${action}`, {
       method: 'POST',
@@ -166,6 +174,10 @@ class ApiService {
   // --------------------
   async getCourses() {
     return this.makeRequest('/courses');
+  }
+
+  async getInstructorCourses(instructorId: string) {
+    return this.makeRequest(`/courses/instructor/${instructorId}`);
   }
 
   async getCourseById(id: string) {

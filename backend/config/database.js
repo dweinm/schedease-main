@@ -315,6 +315,10 @@ const studentSchema = new mongoose.Schema({
     unique: true,
     trim: true
   },
+  department: {
+    type: String,
+    trim: true
+  },
   year: {
     type: String,
     required: true,
@@ -488,6 +492,7 @@ const enrollmentSchema = new mongoose.Schema({
   instructorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Instructor' },
   yearLevel: { type: String, enum: ['1','2','3','4'] },
   section: { type: String },
+  department: { type: String },
   // Denormalized fields for quick access
   studentName: { type: String },
   courseName: { type: String },
@@ -503,6 +508,8 @@ enrollmentSchema.pre('save', async function(next) {
       const student = await mongoose.model('Student').findById(this.studentId).populate('userId');
       if (student && student.userId) {
         this.studentName = student.userId.name;
+        // Store department from Student or User for quick filtering
+        this.department = student.department || student.userId.department || this.department;
       }
 
       // Populate course details
@@ -738,6 +745,7 @@ export async function seedDatabase() {
         const student = new Student({
           userId: studentUser._id,
           studentId: `STU${Date.now()}`,
+          department: studentUser.department,
           year: '2',
           section: studentUser.section,
           enrolledCourses: courses.map(c => c._id)

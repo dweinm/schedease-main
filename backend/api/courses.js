@@ -1,4 +1,5 @@
 import { Course } from '../config/database.js';
+import { Schedule } from '../config/database.js';
 
 // Get all courses
 export async function getCourses(req, res) {
@@ -25,6 +26,36 @@ export async function getCourseById(req, res) {
   } catch (error) {
     console.error('Get course by ID error:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch course' });
+  }
+}
+
+// Get courses for a specific instructor (by direct assignment or via schedules)
+export async function getInstructorCourses(req, res) {
+  try {
+    const { instructorId } = req.params;
+
+    // Find courses where course.instructorId matches
+    const directlyAssigned = await Course.find({ instructorId: instructorId })
+      .populate({ path: 'instructorId', populate: { path: 'userId', model: 'User' } });
+
+    // Find distinct courseIds from schedules taught by this instructor
+    const scheduleCourseIds = await Schedule.distinct('courseId', { instructorId });
+
+    // Fetch those courses too (avoid duplicates)
+    const viaSchedules = await Course.find({ _id: { $in: scheduleCourseIds } })
+      .populate({ path: 'instructorId', populate: { path: 'userId', model: 'User' } });
+
+    // Merge unique courses by _id
+    const map = new Map();
+    for (const c of [...directlyAssigned, ...viaSchedules]) {
+      map.set(String(c._id), c);
+    }
+    const courses = Array.from(map.values()).sort((a, b) => a.code.localeCompare(b.code));
+
+    res.json({ success: true, courses });
+  } catch (error) {
+    console.error('Get instructor courses error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch instructor courses' });
   }
 }
 

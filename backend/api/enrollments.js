@@ -75,7 +75,7 @@ export async function getInstructorEnrollments(req, res) {
     }
 
     const enrollments = await Enrollment.find({ instructorId })
-      .populate('studentId')
+      .populate({ path: 'studentId', populate: { path: 'userId', model: 'User' } })
       .populate('courseId')
       .populate('scheduleId');
 
@@ -83,6 +83,33 @@ export async function getInstructorEnrollments(req, res) {
   } catch (error) {
     console.error('Get instructor enrollments error:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch enrollments' });
+  }
+}
+
+// Get enrollments for a specific schedule (instructor must own the schedule unless admin)
+export async function getScheduleEnrollments(req, res) {
+  try {
+    const { scheduleId } = req.params;
+
+    const schedule = await Schedule.findById(scheduleId);
+    if (!schedule) return res.status(404).json({ success: false, message: 'Schedule not found' });
+
+    if (req.user.role !== 'admin') {
+      const instr = await Instructor.findOne({ userId: req.user.id });
+      if (!instr || String(instr._id) !== String(schedule.instructorId)) {
+        return res.status(403).json({ success: false, message: 'Forbidden' });
+      }
+    }
+
+    const enrollments = await Enrollment.find({ scheduleId })
+      .populate({ path: 'studentId', populate: { path: 'userId', model: 'User' } })
+      .populate('courseId')
+      .populate('scheduleId');
+
+    res.json({ success: true, enrollments });
+  } catch (error) {
+    console.error('Get schedule enrollments error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch schedule enrollments' });
   }
 }
 
@@ -165,6 +192,7 @@ export const createEnrollment = async (req, res) => {
         instructorId: instructor?._id || null,
         yearLevel: payload.yearLevel || stud.year,
         section: payload.section || stud.section,
+        department: stud.department || populatedStudent.userId?.department,
         // Denormalized fields
         studentName: populatedStudent.userId.name,
         courseName: course.name,

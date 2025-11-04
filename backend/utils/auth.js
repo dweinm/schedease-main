@@ -111,6 +111,7 @@ export async function createUser(userData) {
       const student = new Student({
         userId: savedUser._id,
         studentId: userData.studentId || `STU${Date.now()}`,
+        department: savedUser.department,
         year: userData.year,
         section: userData.section,
         enrolledCourses: userData.enrolledCourses || []

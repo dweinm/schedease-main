@@ -10,12 +10,12 @@ import { requireAuth, requireAdmin } from './utils/auth.js';
 // Individual route handlers
 import { login, register, getCurrentUser } from './api/auth.js';
 import { getInstructors, getInstructorById } from './api/instructors.js';
-import { getCourses, getCourseById, createCourse, updateCourse, deleteCourse } from './api/courses.js';
+import { getCourses, getCourseById, getInstructorCourses, createCourse, updateCourse, deleteCourse } from './api/courses.js';
 import { getAvailableRooms, getRoomById, getRooms, createRoom, updateRoom, deleteRoom } from './api/rooms.js';
 import { getUsers, getUserById, createUser, updateUser, deleteUser } from './api/users.js';
 import { getScheduleRequests, getInstructorScheduleRequests, createScheduleRequest, updateScheduleRequestStatus, approveScheduleRequest, rejectScheduleRequest, deleteScheduleRequest } from './api/schedule-requests.js';
 import { getStudents } from './api/admin/students.js';
-import { getEnrollments, getStudentEnrollments, getMyEnrollments, getInstructorEnrollments, createEnrollment, deleteEnrollment } from './api/enrollments.js';
+import { getEnrollments, getStudentEnrollments, getMyEnrollments, getInstructorEnrollments, getScheduleEnrollments, createEnrollment, deleteEnrollment } from './api/enrollments.js';
 
 // Router-style routes
 import notificationsRouter from './api/notifications.js';
@@ -75,6 +75,7 @@ app.delete('/api/users/:id', requireAuth, requireAdmin, deleteUser);
 // Course routes
 app.get('/api/courses', requireAuth, getCourses);
 app.get('/api/courses/:id', requireAuth, getCourseById);
+app.get('/api/courses/instructor/:instructorId', requireAuth, getInstructorCourses);
 app.post('/api/courses', requireAuth, requireAdmin, createCourse);
 app.put('/api/courses/:id', requireAuth, requireAdmin, updateCourse);
 app.delete('/api/courses/:id', requireAuth, requireAdmin, deleteCourse);
@@ -97,6 +98,7 @@ app.get('/api/admin/students', requireAuth, requireAdmin, getStudents);
 app.get('/api/enrollments/me', requireAuth, getMyEnrollments);  // Most specific routes first
 app.get('/api/enrollments/student/:studentId', requireAuth, getStudentEnrollments);
 app.get('/api/enrollments/instructor/:instructorId', requireAuth, getInstructorEnrollments);
+app.get('/api/enrollments/schedule/:scheduleId', requireAuth, getScheduleEnrollments);
 app.get('/api/enrollments', requireAuth, requireAdmin, getEnrollments);
 app.post('/api/enrollments', requireAuth, requireAdmin, createEnrollment);
 app.delete('/api/enrollments/:id', requireAuth, requireAdmin, deleteEnrollment);

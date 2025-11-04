@@ -62,6 +62,7 @@ interface Student {
   email: string;
   studentId: string;
   year: number;
+  department?: string;
   courses: string[];
   attendance?: number;
   performance?: 'excellent' | 'good' | 'average' | 'needs_improvement';
@@ -166,6 +167,13 @@ export function InstructorDashboard() {
   });
   const [roomAvailability, setRoomAvailability] = useState<Record<string, RoomAvailability>>({});
   const [selectedRoomForDetails, setSelectedRoomForDetails] = useState<string | null>(null);
+  const [showScheduleDialog, setShowScheduleDialog] = useState(false);
+  const [selectedSchedule, setSelectedSchedule] = useState<Schedule | null>(null);
+  const [scheduleStudents, setScheduleStudents] = useState<Array<{ _id: string; name: string; email: string; studentId: string }>>([]);
+  const [showCourseDialog, setShowCourseDialog] = useState(false);
+  const [selectedCourseForDialog, setSelectedCourseForDialog] = useState<Course | null>(null);
+  const [selectedCourseScheduleId, setSelectedCourseScheduleId] = useState<string | null>(null);
+  const [courseScheduleStudents, setCourseScheduleStudents] = useState<Array<{ _id: string; name: string; email: string; studentId: string }>>([]);
   const [roomSchedule, setRoomSchedule] = useState<{
     date: string;
     schedules: Array<{
@@ -264,42 +272,63 @@ export function InstructorDashboard() {
             const instructorId = match._id || match.id;
             setInstructorProfileId(instructorId);
 
-            // Fetch instructor's courses
-            const coursesRes = await apiService.getCourses();
-            const allCourses = coursesRes?.courses || [];
-            
-            // Filter courses for this instructor
-            const instructorCourses = allCourses.filter((course: any) => 
-              course.instructorId === instructorId || course.instructor?._id === instructorId
-            );
+            // Fetch instructor's courses via dedicated endpoint (includes direct and scheduled)
+            const coursesRes = await apiService.getInstructorCourses(instructorId);
+            const instructorCourses = coursesRes?.courses || coursesRes?.data || [];
             setCourses(instructorCourses);
 
-            // Fetch instructor's schedules 
-            const res = await apiService.getSchedules();
-            const allSchedules = res?.schedules || [];
-            
-            // Filter schedules for this instructor and populate with course/room info
-            const instructorSchedules = allSchedules
-              .filter((schedule: any) => {
-                const sid = schedule.instructorId?._id || schedule.instructorId;
-                return String(sid) === String(instructorId);
-              })
-              .map((schedule: any) => ({
-                _id: schedule._id,
-                courseId: schedule.courseId?._id || schedule.courseId,
-                courseName: schedule.courseId?.name || schedule.courseName || '',
-                courseCode: schedule.courseId?.code || schedule.courseCode || '',
-                roomName: schedule.roomId?.name || schedule.roomName || '',
-                dayOfWeek: schedule.dayOfWeek,
-                startTime: schedule.startTime,
-                endTime: schedule.endTime,
-                semester: schedule.semester,
-                year: schedule.year,
-                studentsEnrolled: schedule.courseId?.studentsEnrolled || 0,
-                capacity: schedule.roomId?.capacity || 0
-              }));
-
+            // Fetch instructor's schedules via dedicated endpoint
+            const schedRes = await apiService.getInstructorSchedules(instructorId);
+            const instructorSchedulesRaw = schedRes?.schedules || schedRes?.data || [];
+            const instructorSchedules = instructorSchedulesRaw.map((schedule: any) => ({
+              _id: schedule._id,
+              courseId: schedule.courseId?._id || schedule.courseId,
+              courseName: schedule.courseId?.name || schedule.courseName || '',
+              courseCode: schedule.courseId?.code || schedule.courseCode || '',
+              roomName: schedule.roomId?.name || schedule.roomName || '',
+              dayOfWeek: schedule.dayOfWeek,
+              startTime: schedule.startTime,
+              endTime: schedule.endTime,
+              semester: schedule.semester,
+              year: schedule.year,
+              studentsEnrolled: schedule.courseId?.studentsEnrolled || 0,
+              capacity: schedule.roomId?.capacity || 0
+            }));
             setSchedules(instructorSchedules);
+
+            // Fetch instructor's students via enrollments
+            try {
+              const enrollRes = await apiService.getInstructorEnrollments(instructorId);
+              const enrollments = enrollRes?.enrollments || enrollRes?.data || [];
+
+              // Build unique students list with enrolled course IDs (UI expects course IDs)
+              const studentMap = new Map<string, { _id: string; name: string; email: string; studentId: string; year: number; department?: string; courses: string[] }>();
+              for (const e of enrollments) {
+                const stud = e.studentId || {};
+                const userObj = stud.userId || {};
+                const key = String(stud._id || stud.id);
+                const name = (
+                  userObj.name ||
+                  `${(userObj.firstName || '').trim()} ${(userObj.lastName || '').trim()}`.trim()
+                ).trim() || 'Unknown Student';
+                const email = userObj.email || '';
+                const courseId = String(e.courseId?._id || e.courseId || '');
+                const studentId = stud.studentId || '';
+                const year = Number(stud.year || e.yearLevel || 0) || 0;
+                const department = userObj.department || '';
+
+                if (!studentMap.has(key)) {
+                  studentMap.set(key, { _id: String(stud._id || key), name, email, studentId, year, department, courses: courseId ? [courseId] : [] });
+                } else if (courseId) {
+                  const entry = studentMap.get(key)!;
+                  if (!entry.courses.includes(courseId)) entry.courses.push(courseId);
+                }
+              }
+              setStudents(Array.from(studentMap.values()));
+            } catch (e) {
+              console.warn('Failed to load instructor enrollments/students', e);
+              setStudents([]);
+            }
 
             // Fetch instructor's schedule requests
             const reqsRes = await apiService.getInstructorScheduleRequests(instructorId);
@@ -334,6 +363,78 @@ export function InstructorDashboard() {
       toast.error('Failed to load your schedule');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const openScheduleDialog = async (schedule: any) => {
+    try {
+      setSelectedSchedule(schedule);
+      setShowScheduleDialog(true);
+      const res = await apiService.getScheduleEnrollments(schedule._id);
+      const enrollments = res?.enrollments || res?.data || [];
+      const items = enrollments.map((e: any) => {
+        const stud = e.studentId || {};
+        const userObj = stud.userId || {};
+        const name = (
+          userObj.name || `${(userObj.firstName || '').trim()} ${(userObj.lastName || '').trim()}`.trim()
+        ).trim() || 'Unknown Student';
+        return {
+          _id: String(stud._id || e._id),
+          name,
+          email: userObj.email || '',
+          studentId: stud.studentId || ''
+        };
+      });
+      setScheduleStudents(items);
+    } catch (error) {
+      console.error('Failed to load schedule enrollments', error);
+      toast.error('Failed to load enrolled students');
+      setScheduleStudents([]);
+    }
+  };
+
+  const openCourseDialog = async (course: any) => {
+    try {
+      setSelectedCourseForDialog(course);
+      setShowCourseDialog(true);
+      // Find schedules for this course (for this instructor)
+      const courseSchedules = schedules.filter(s => String(s.courseId) === String(course._id));
+      if (courseSchedules.length > 0) {
+        const first = courseSchedules[0];
+        setSelectedCourseScheduleId(String(first._id));
+        await loadStudentsForCourseSchedule(String(first._id));
+      } else {
+        setSelectedCourseScheduleId(null);
+        setCourseScheduleStudents([]);
+      }
+    } catch (error) {
+      console.error('Failed to open course dialog', error);
+      toast.error('Failed to load course details');
+    }
+  };
+
+  const loadStudentsForCourseSchedule = async (scheduleId: string) => {
+    try {
+      const res = await apiService.getScheduleEnrollments(scheduleId);
+      const enrollments = res?.enrollments || res?.data || [];
+      const items = enrollments.map((e: any) => {
+        const stud = e.studentId || {};
+        const userObj = stud.userId || {};
+        const name = (
+          userObj.name || `${(userObj.firstName || '').trim()} ${(userObj.lastName || '').trim()}`.trim()
+        ).trim() || 'Unknown Student';
+        return {
+          _id: String(stud._id || e._id),
+          name,
+          email: userObj.email || '',
+          studentId: stud.studentId || ''
+        };
+      });
+      setCourseScheduleStudents(items);
+    } catch (error) {
+      console.error('Failed to load schedule students', error);
+      toast.error('Failed to load enrolled students');
+      setCourseScheduleStudents([]);
     }
   };
 
@@ -822,7 +923,7 @@ export function InstructorDashboard() {
                           {daySchedules
                             .sort((a: any, b: any) => a.startTime.localeCompare(b.startTime))
                             .map((schedule: any) => (
-                              <div key={schedule._id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                              <div key={schedule._id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg cursor-pointer hover:bg-gray-100" onClick={() => openScheduleDialog(schedule)}>
                                 <div>
                                   <p className="font-medium text-gray-900">
                                     {schedule.courseCode} - {schedule.courseName}
@@ -897,7 +998,7 @@ export function InstructorDashboard() {
      s      <CardContent>
               <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                 {termCourses.map((course: any) => (
-                  <Card key={course._id} className="border shadow-sm">
+                  <Card key={course._id} className="border shadow-sm cursor-pointer hover:shadow-md transition-shadow" onClick={() => openCourseDialog(course)}>
                     <CardHeader>
                       <div className="flex items-center justify-between mb-2">
                         <Badge className={course.type === 'lecture' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'}>
@@ -909,7 +1010,7 @@ export function InstructorDashboard() {
                       <CardDescription>{course.name}</CardDescription>
                     </CardHeader>
                     <CardContent>
-      HHHd d d              <div className="space-y-2">
+                    <div className="space-y-2">
                         <div className="flex justify-between text-sm">
                           <span className="text-gray-500">Department:</span>
                           <span className="font-medium">{course.department}</span>
@@ -951,6 +1052,107 @@ export function InstructorDashboard() {
       </div>
     );
   };
+
+  {/* Schedule Details Dialog */}
+  <Dialog open={showScheduleDialog} onOpenChange={setShowScheduleDialog}>
+    <DialogContent className="bg-white max-w-lg">
+      <DialogHeader>
+        <DialogTitle>Schedule Details</DialogTitle>
+        <DialogDescription>
+          {selectedSchedule ? (
+            <div className="text-sm text-gray-600">
+              {selectedSchedule.courseCode} - {selectedSchedule.courseName} • {selectedSchedule.dayOfWeek} {selectedSchedule.startTime}-{selectedSchedule.endTime}
+            </div>
+          ) : null}
+        </DialogDescription>
+      </DialogHeader>
+      <div className="space-y-3">
+        {scheduleStudents.length > 0 ? (
+          <div className="border rounded-lg overflow-hidden">
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-gray-50">
+                  <TableHead className="font-semibold">Student</TableHead>
+                  <TableHead className="font-semibold">Student ID</TableHead>
+                  <TableHead className="font-semibold">Email</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {scheduleStudents.map(s => (
+                  <TableRow key={s._id}>
+                    <TableCell>{s.name}</TableCell>
+                    <TableCell>{s.studentId}</TableCell>
+                    <TableCell>{s.email}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        ) : (
+          <div className="text-center text-gray-500 py-6">No students enrolled.</div>
+        )}
+      </div>
+    </DialogContent>
+  </Dialog>
+
+  {/* Course Details Dialog */}
+  <Dialog open={showCourseDialog} onOpenChange={setShowCourseDialog}>
+    <DialogContent className="bg-white max-w-2xl">
+      <DialogHeader>
+        <DialogTitle>Course Details</DialogTitle>
+        <DialogDescription>
+          {selectedCourseForDialog ? (
+            <div className="text-sm text-gray-600">
+              {selectedCourseForDialog.code} - {selectedCourseForDialog.name}
+            </div>
+          ) : null}
+        </DialogDescription>
+      </DialogHeader>
+      <div className="space-y-4">
+        <div className="flex items-center gap-2 text-sm text-gray-600">
+          <span className="font-medium">Department:</span>
+          <span>{selectedCourseForDialog?.department}</span>
+        </div>
+        <div className="space-y-2">
+          <div className="text-sm font-medium text-gray-900">Schedules</div>
+          <div className="flex flex-wrap gap-2">
+            {schedules.filter(s => String(s.courseId) === String(selectedCourseForDialog?._id)).map(s => (
+              <Badge key={s._id} className={`cursor-pointer ${String(selectedCourseScheduleId) === String(s._id) ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-800'}`} onClick={() => { setSelectedCourseScheduleId(String(s._id)); loadStudentsForCourseSchedule(String(s._id)); }}>
+                {s.dayOfWeek} {s.startTime}-{s.endTime}
+              </Badge>
+            ))}
+            {schedules.filter(s => String(s.courseId) === String(selectedCourseForDialog?._id)).length === 0 && (
+              <span className="text-sm text-gray-500">No schedules</span>
+            )}
+          </div>
+        </div>
+        <div className="border rounded-lg overflow-hidden">
+          <Table>
+            <TableHeader>
+              <TableRow className="bg-gray-50">
+                <TableHead className="font-semibold">Student</TableHead>
+                <TableHead className="font-semibold">Student ID</TableHead>
+                <TableHead className="font-semibold">Email</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {courseScheduleStudents.length > 0 ? courseScheduleStudents.map(s => (
+                <TableRow key={s._id}>
+                  <TableCell>{s.name}</TableCell>
+                  <TableCell>{s.studentId}</TableCell>
+                  <TableCell>{s.email}</TableCell>
+                </TableRow>
+              )) : (
+                <TableRow>
+                  <TableCell colSpan={3} className="text-center text-gray-500">No students enrolled.</TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </div>
+      </div>
+    </DialogContent>
+  </Dialog>
 
   const StudentsContent = () => (
     <div className="space-y-6">
@@ -1010,6 +1212,7 @@ export function InstructorDashboard() {
                   <TableHead className="font-semibold">Student</TableHead>
                   <TableHead className="font-semibold">Student ID</TableHead>
                   <TableHead className="font-semibold">Year</TableHead>
+                  <TableHead className="font-semibold">Department</TableHead>
                   <TableHead className="font-semibold">Courses</TableHead>
                   <TableHead className="font-semibold">Attendance</TableHead>
                   <TableHead className="font-semibold">Performance</TableHead>
@@ -1026,6 +1229,7 @@ export function InstructorDashboard() {
                     </TableCell>
                     <TableCell className="text-gray-600">{student.studentId}</TableCell>
                     <TableCell className="text-gray-600">Year {student.year}</TableCell>
+                    <TableCell className="text-gray-600">{student.department || '—'}</TableCell>
                     <TableCell>
                       <div className="flex gap-1">
                         {student.courses.map(courseId => {
@@ -1582,6 +1786,107 @@ export function InstructorDashboard() {
       {activeTab === 'students' && <StudentsContent />}
       {activeTab === 'requests' && <RequestsContent />}
       {activeTab === 'settings' && <SettingsContent />}
+
+      {/* Schedule Details Dialog */}
+      <Dialog open={showScheduleDialog} onOpenChange={setShowScheduleDialog}>
+        <DialogContent className="bg-white max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Schedule Details</DialogTitle>
+            <DialogDescription>
+              {selectedSchedule ? (
+                <div className="text-sm text-gray-600">
+                  {selectedSchedule.courseCode} - {selectedSchedule.courseName} • {selectedSchedule.dayOfWeek} {selectedSchedule.startTime}-{selectedSchedule.endTime}
+                </div>
+              ) : null}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            {scheduleStudents.length > 0 ? (
+              <div className="border rounded-lg overflow-hidden">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-gray-50">
+                      <TableHead className="font-semibold">Student</TableHead>
+                      <TableHead className="font-semibold">Student ID</TableHead>
+                      <TableHead className="font-semibold">Email</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {scheduleStudents.map(s => (
+                      <TableRow key={s._id}>
+                        <TableCell>{s.name}</TableCell>
+                        <TableCell>{s.studentId}</TableCell>
+                        <TableCell>{s.email}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            ) : (
+              <div className="text-center text-gray-500 py-6">No students enrolled.</div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Course Details Dialog */}
+      <Dialog open={showCourseDialog} onOpenChange={setShowCourseDialog}>
+        <DialogContent className="bg-white max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Course Details</DialogTitle>
+            <DialogDescription>
+              {selectedCourseForDialog ? (
+                <div className="text-sm text-gray-600">
+                  {selectedCourseForDialog.code} - {selectedCourseForDialog.name}
+                </div>
+              ) : null}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="flex items-center gap-2 text-sm text-gray-600">
+              <span className="font-medium">Department:</span>
+              <span>{selectedCourseForDialog?.department}</span>
+            </div>
+            <div className="space-y-2">
+              <div className="text-sm font-medium text-gray-900">Schedules</div>
+              <div className="flex flex-wrap gap-2">
+                {schedules.filter(s => String(s.courseId) === String(selectedCourseForDialog?._id)).map(s => (
+                  <Badge key={s._id} className={`cursor-pointer ${String(selectedCourseScheduleId) === String(s._id) ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-800'}`} onClick={() => { setSelectedCourseScheduleId(String(s._id)); loadStudentsForCourseSchedule(String(s._id)); }}>
+                    {s.dayOfWeek} {s.startTime}-{s.endTime}
+                  </Badge>
+                ))}
+                {schedules.filter(s => String(s.courseId) === String(selectedCourseForDialog?._id)).length === 0 && (
+                  <span className="text-sm text-gray-500">No schedules</span>
+                )}
+              </div>
+            </div>
+            <div className="border rounded-lg overflow-hidden">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-gray-50">
+                    <TableHead className="font-semibold">Student</TableHead>
+                    <TableHead className="font-semibold">Student ID</TableHead>
+                    <TableHead className="font-semibold">Email</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {courseScheduleStudents.length > 0 ? courseScheduleStudents.map(s => (
+                    <TableRow key={s._id}>
+                      <TableCell>{s.name}</TableCell>
+                      <TableCell>{s.studentId}</TableCell>
+                      <TableCell>{s.email}</TableCell>
+                    </TableRow>
+                  )) : (
+                    <TableRow>
+                      <TableCell colSpan={3} className="text-center text-gray-500">No students enrolled.</TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </DashboardLayout>
   );
 }
