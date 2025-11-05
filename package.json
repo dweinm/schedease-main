@@ -1,0 +1,33 @@
+{
+  "name": "schedease",
+  "version": "1.0.0",
+  "description": "Automated Class and Room Scheduling System",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "cd backend && npm start",
+    "dev": "cd backend && npm run dev",
+    "dev:watch": "cd backend && npm run dev:watch",
+    "setup-db": "cd backend && npm run setup-db",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:both": "concurrently \"npm run dev\" \"npm run dev:frontend\"",
+    "install:all": "npm install && cd backend && npm install && cd ../frontend && npm install"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "mongoose": "^8.19.2"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.0"
+  },
+  "keywords": [
+    "scheduling",
+    "education",
+    "class-management",
+    "room-booking",
+    "university",
+    "automation"
+  ],
+  "author": "schedease Team",
+  "license": "MIT"
+}
